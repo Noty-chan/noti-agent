@@ -47,6 +47,10 @@ class NotyBot:
         user_id = event["user_id"]
         text = event["text"]
 
+        relationship = event.get("relationship")
+        if not relationship and self.relationship_manager:
+            relationship = self.relationship_manager.get_relationship(user_id)
+
         self.session_store.set(
             f"chat:{chat_id}",
             {
@@ -75,10 +79,10 @@ class NotyBot:
                 message_text=text,
                 mood=mood_state["mood"],
                 energy=mood_state["energy"],
-                user_relationship=event.get("relationship"),
+                user_relationship=relationship,
             )
 
-            self.monologue.generate_thoughts(
+            thought_entry = self.monologue.generate_thoughts(
                 {
                     "chat_id": chat_id,
                     "chat_name": event.get("chat_name", "Unknown"),
@@ -96,7 +100,11 @@ class NotyBot:
                 llm_response = self.api_rotator.call(messages=[{"role": "user", "content": prompt}])
 
             self.metrics.record_tokens(llm_response.get("usage"))
-            self.mood_manager.update_on_event("interesting_topic")
+            strategy = thought_entry.get("strategy", "balanced")
+            if strategy == "harsh_sarcasm":
+                self.mood_manager.update_on_event("annoying_message")
+            else:
+                self.mood_manager.update_on_event("interesting_topic")
             mood_after = self.mood_manager.get_current_state()
             response_text = llm_response.get("content", "")
 
@@ -108,7 +116,13 @@ class NotyBot:
                 mood_after=mood_after["mood"],
                 tools_used=[],
             )
-            self._update_memory_after_response(event, response_text=response_text, outcome="success")
+            self._update_memory_after_response(
+                event,
+                response_text=response_text,
+                outcome="success",
+                tone_used=strategy,
+                thought_quality=thought_entry.get("quality_score", 0.0),
+            )
 
             return {
                 "status": "responded",
@@ -152,7 +166,14 @@ class NotyBot:
         conn.commit()
         conn.close()
 
-    def _update_memory_after_response(self, event: Dict[str, Any], response_text: str, outcome: str) -> None:
+    def _update_memory_after_response(
+        self,
+        event: Dict[str, Any],
+        response_text: str,
+        outcome: str,
+        tone_used: str = "balanced",
+        thought_quality: float = 0.0,
+    ) -> None:
         if self.relationship_manager:
             username = event.get("username", f"user_{event['user_id']}")
             interaction_outcome = "positive" if outcome == "success" else "negative"
@@ -160,7 +181,8 @@ class NotyBot:
                 user_id=event["user_id"],
                 username=username,
                 interaction_outcome=interaction_outcome,
-                notes=f"Взаимодействие в чате {event['chat_id']} с outcome={outcome}",
+                notes=f"Взаимодействие в чате {event['chat_id']} с outcome={outcome}; thought_quality={thought_quality}",
+                tone_used=tone_used,
             )
 
         if self.mem0:

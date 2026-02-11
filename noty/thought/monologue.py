@@ -1,4 +1,4 @@
-"""Внутренний монолог и логирование мыслей Ноти."""
+"""Внутренний монолог, оценка качества мыслей и логирование."""
 
 from __future__ import annotations
 
@@ -45,6 +45,35 @@ class InternalMonologue:
         self.api = api_rotator
         self.logger = thought_logger
 
+    @staticmethod
+    def _extract_strategy(thoughts: List[str], mood: str) -> str:
+        joined = " ".join(thoughts).lower()
+        if "игрив" in joined or "шут" in joined:
+            return "playful_sarcasm"
+        if "жест" in joined or "колк" in joined:
+            return "harsh_sarcasm"
+        if "крат" in joined or "сух" in joined:
+            return "dry_brief"
+        if mood in {"curious", "playful"}:
+            return "playful_sarcasm"
+        if mood == "irritated":
+            return "harsh_sarcasm"
+        return "balanced"
+
+    @staticmethod
+    def _evaluate_quality(thoughts: List[str]) -> float:
+        if not thoughts:
+            return 0.0
+        score = 0.0
+        if 3 <= len(thoughts) <= 7:
+            score += 0.4
+        unique_ratio = len({t.lower() for t in thoughts}) / len(thoughts)
+        score += 0.3 * unique_ratio
+        avg_len = sum(len(t) for t in thoughts) / len(thoughts)
+        if 25 <= avg_len <= 220:
+            score += 0.3
+        return round(min(score, 1.0), 3)
+
     def generate_thoughts(self, context: Dict[str, Any], cheap_model: bool = True) -> Dict[str, Any]:
         prompt = (
             f"Ситуация:\n- Чат: {context.get('chat_name', 'Неизвестный')}\n"
@@ -57,6 +86,10 @@ class InternalMonologue:
         model = "meta-llama/llama-3.1-8b-instruct" if cheap_model else "meta-llama/llama-3.1-70b-instruct"
         response = self.api.call(messages=[{"role": "user", "content": prompt}], model=model, temperature=0.8, max_tokens=300)
         thoughts = [line.strip().lstrip("0123456789.-) ") for line in response["content"].split("\n") if line.strip()]
+        strategy = self._extract_strategy(thoughts, mood=context.get("mood", "neutral"))
+        quality = self._evaluate_quality(thoughts)
+        decision = "respond" if quality >= 0.35 else "ignore"
+
         thought_entry = {
             "timestamp": datetime.now().isoformat(),
             "chat_id": context.get("chat_id"),
@@ -66,6 +99,9 @@ class InternalMonologue:
             "trigger": "message_received",
             "message": context.get("message"),
             "thoughts": thoughts,
+            "decision": decision,
+            "strategy": strategy,
+            "quality_score": quality,
             "mood_before": context.get("mood"),
             "energy_before": context.get("energy"),
         }

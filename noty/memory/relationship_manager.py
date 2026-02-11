@@ -4,13 +4,17 @@ from __future__ import annotations
 
 import sqlite3
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Protocol
 
-from .mem0_wrapper import Mem0Wrapper
+
+class MemoryLike(Protocol):
+    def recall(self, query: str, user_id: str, limit: int = 5): ...
+
+    def remember(self, text: str, user_id: str, metadata: Optional[Dict] = None): ...
 
 
 class RelationshipManager:
-    def __init__(self, db_path: str, mem0: Mem0Wrapper):
+    def __init__(self, db_path: str, mem0: MemoryLike):
         self.db_path = db_path
         self.mem0 = mem0
         self._init_db()
@@ -51,7 +55,26 @@ class RelationshipManager:
         rel["memories"] = [m["text"] for m in memories]
         return rel
 
-    def update_relationship(self, user_id: int, username: str, interaction_outcome: str, notes: Optional[str] = None):
+    @staticmethod
+    def _derive_preferred_tone(score: int, positive_ratio: float) -> str:
+        if score >= 6:
+            return "playful"
+        if score <= -6:
+            return "harsh"
+        if positive_ratio >= 0.7 and score > 2:
+            return "mild_sarcasm"
+        if positive_ratio <= 0.3 and score < -2:
+            return "dry"
+        return "medium_sarcasm"
+
+    def update_relationship(
+        self,
+        user_id: int,
+        username: str,
+        interaction_outcome: str,
+        notes: Optional[str] = None,
+        tone_used: Optional[str] = None,
+    ):
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         cursor.execute("SELECT relationship_score FROM relationships WHERE user_id = ?", (user_id,))
@@ -72,6 +95,9 @@ class RelationshipManager:
         score_change = {"positive": 1, "negative": -1, "neutral": 0}.get(interaction_outcome, 0)
         new_score = max(-10, min(10, current_score + score_change))
 
+        positive_delta = 1 if interaction_outcome == "positive" else 0
+        negative_delta = 1 if interaction_outcome == "negative" else 0
+
         cursor.execute(
             """
             UPDATE relationships
@@ -86,11 +112,30 @@ class RelationshipManager:
             (
                 new_score,
                 datetime.now(),
-                1 if interaction_outcome == "positive" else 0,
-                1 if interaction_outcome == "negative" else 0,
+                positive_delta,
+                negative_delta,
                 notes or "",
                 user_id,
             ),
+        )
+
+        cursor.execute(
+            """
+            SELECT positive_interactions, negative_interactions
+            FROM relationships
+            WHERE user_id = ?
+            """,
+            (user_id,),
+        )
+        totals_row = cursor.fetchone()
+        positive_total = totals_row[0] if totals_row else 0
+        negative_total = totals_row[1] if totals_row else 0
+        total_feedback = positive_total + negative_total
+        positive_ratio = (positive_total / total_feedback) if total_feedback else 0.5
+        preferred_tone = tone_used or self._derive_preferred_tone(new_score, positive_ratio)
+        cursor.execute(
+            "UPDATE relationships SET preferred_tone = ? WHERE user_id = ?",
+            (preferred_tone, user_id),
         )
         conn.commit()
         conn.close()
@@ -99,5 +144,10 @@ class RelationshipManager:
             self.mem0.remember(
                 notes,
                 user_id=f"user_{user_id}",
-                metadata={"type": "relationship_update", "outcome": interaction_outcome, "score": new_score},
+                metadata={
+                    "type": "relationship_update",
+                    "outcome": interaction_outcome,
+                    "score": new_score,
+                    "preferred_tone": preferred_tone,
+                },
             )
