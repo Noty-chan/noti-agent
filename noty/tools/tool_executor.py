@@ -4,17 +4,21 @@ from __future__ import annotations
 
 import hashlib
 import inspect
+import json
 import time
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Callable, Dict
 
 
 class SafeToolExecutor:
-    def __init__(self, owner_id: int):
+    def __init__(self, owner_id: int, actions_log_dir: str = "./noty/data/logs/actions"):
         self.owner_id = owner_id
         self.pending_confirmations: Dict[str, Dict[str, Any]] = {}
         self.tools_registry: Dict[str, Dict[str, Any]] = {}
         self.execution_log: list[Dict[str, Any]] = []
+        self.actions_log_dir = Path(actions_log_dir)
+        self.actions_log_dir.mkdir(parents=True, exist_ok=True)
 
     def register_tool(
         self,
@@ -84,6 +88,7 @@ class SafeToolExecutor:
             del self.pending_confirmations[confirmation_id]
             return {"status": "success", "result": result, "message": "✅ Подтверждено и выполнено"}
         except Exception as exc:  # noqa: BLE001
+            self._log_execution(tool_call["name"], pending["user_id"], pending["chat_id"], tool_call.get("arguments", {}), None, "error", str(exc))
             return {"status": "error", "message": f"Ошибка выполнения: {exc}"}
 
     @staticmethod
@@ -102,15 +107,18 @@ class SafeToolExecutor:
         status: str,
         error: str | None = None,
     ):
-        self.execution_log.append(
-            {
-                "timestamp": datetime.now().isoformat(),
-                "function_name": function_name,
-                "user_id": user_id,
-                "chat_id": chat_id,
-                "arguments": arguments,
-                "result": result,
-                "status": status,
-                "error": error,
-            }
-        )
+        entry = {
+            "timestamp": datetime.now().isoformat(),
+            "function_name": function_name,
+            "user_id": user_id,
+            "chat_id": chat_id,
+            "arguments": arguments,
+            "result": result,
+            "status": status,
+            "error": error,
+        }
+        self.execution_log.append(entry)
+
+        day_file = self.actions_log_dir / f"{datetime.now().strftime('%Y-%m-%d')}.jsonl"
+        with open(day_file, "a", encoding="utf-8") as file:
+            file.write(json.dumps(entry, ensure_ascii=False) + "\n")
