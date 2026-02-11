@@ -1,0 +1,6 @@
+chats:
+  default:
+    moderation_enabled: true
+    noty_is_admin: false
+    activity_level: "medium"
+    preferred_tone: "medium_sarcasm"
