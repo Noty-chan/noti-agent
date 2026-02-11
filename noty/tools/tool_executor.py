@@ -1,4 +1,4 @@
-"""Безопасное выполнение tool-calls с подтверждением."""
+"""Безопасное выполнение tool-calls с подтверждением и аудитом."""
 
 from __future__ import annotations
 
@@ -19,6 +19,7 @@ class SafeToolExecutor:
         self.execution_log: list[Dict[str, Any]] = []
         self.actions_log_dir = Path(actions_log_dir)
         self.actions_log_dir.mkdir(parents=True, exist_ok=True)
+        self.audit_log_file = self.actions_log_dir / "dangerous_audit.jsonl"
 
     def register_tool(
         self,
@@ -28,6 +29,7 @@ class SafeToolExecutor:
         requires_private: bool = False,
         requires_confirmation: bool = False,
         description: str = "",
+        risk_level: str = "low",
     ):
         self.tools_registry[name] = {
             "function": function,
@@ -35,6 +37,7 @@ class SafeToolExecutor:
             "requires_private": requires_private,
             "requires_confirmation": requires_confirmation,
             "description": description,
+            "risk_level": risk_level,
         }
 
     def execute(self, tool_call: Dict[str, Any], user_id: int, chat_id: int, is_private: bool) -> Dict[str, Any]:
@@ -58,6 +61,14 @@ class SafeToolExecutor:
                 "chat_id": chat_id,
                 "expires_at": time.time() + 60,
             }
+            self._audit_dangerous_action(
+                function_name=function_name,
+                user_id=user_id,
+                chat_id=chat_id,
+                arguments=arguments,
+                stage="confirmation_requested",
+                risk_level=tool_info.get("risk_level", "low"),
+            )
             return {
                 "status": "awaiting_confirmation",
                 "confirmation_id": confirmation_id,
@@ -67,9 +78,28 @@ class SafeToolExecutor:
         try:
             result = self._execute_safely(tool_info["function"], arguments)
             self._log_execution(function_name, user_id, chat_id, arguments, result, "success")
+            if tool_info.get("risk_level") in {"high", "critical"}:
+                self._audit_dangerous_action(
+                    function_name=function_name,
+                    user_id=user_id,
+                    chat_id=chat_id,
+                    arguments=arguments,
+                    stage="executed_without_confirmation",
+                    risk_level=tool_info.get("risk_level", "low"),
+                )
             return {"status": "success", "result": result, "message": f"✅ Выполнено: {function_name}"}
         except Exception as exc:  # noqa: BLE001
             self._log_execution(function_name, user_id, chat_id, arguments, None, "error", str(exc))
+            if tool_info.get("risk_level") in {"high", "critical"}:
+                self._audit_dangerous_action(
+                    function_name=function_name,
+                    user_id=user_id,
+                    chat_id=chat_id,
+                    arguments=arguments,
+                    stage="execution_error",
+                    risk_level=tool_info.get("risk_level", "low"),
+                    error=str(exc),
+                )
             return {"status": "error", "message": f"Ошибка: {exc}"}
 
     def confirm_pending(self, confirmation_id: str) -> Dict[str, Any]:
@@ -85,10 +115,28 @@ class SafeToolExecutor:
         try:
             result = self._execute_safely(tool_info["function"], tool_call.get("arguments", {}))
             self._log_execution(tool_call["name"], pending["user_id"], pending["chat_id"], tool_call.get("arguments", {}), result, "success_confirmed")
+            if tool_info.get("risk_level") in {"high", "critical"} or tool_info.get("requires_confirmation"):
+                self._audit_dangerous_action(
+                    function_name=tool_call["name"],
+                    user_id=pending["user_id"],
+                    chat_id=pending["chat_id"],
+                    arguments=tool_call.get("arguments", {}),
+                    stage="confirmed_and_executed",
+                    risk_level=tool_info.get("risk_level", "low"),
+                )
             del self.pending_confirmations[confirmation_id]
             return {"status": "success", "result": result, "message": "✅ Подтверждено и выполнено"}
         except Exception as exc:  # noqa: BLE001
             self._log_execution(tool_call["name"], pending["user_id"], pending["chat_id"], tool_call.get("arguments", {}), None, "error", str(exc))
+            self._audit_dangerous_action(
+                function_name=tool_call["name"],
+                user_id=pending["user_id"],
+                chat_id=pending["chat_id"],
+                arguments=tool_call.get("arguments", {}),
+                stage="confirmed_execution_error",
+                risk_level=tool_info.get("risk_level", "low"),
+                error=str(exc),
+            )
             return {"status": "error", "message": f"Ошибка выполнения: {exc}"}
 
     @staticmethod
@@ -122,3 +170,26 @@ class SafeToolExecutor:
         day_file = self.actions_log_dir / f"{datetime.now().strftime('%Y-%m-%d')}.jsonl"
         with open(day_file, "a", encoding="utf-8") as file:
             file.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+    def _audit_dangerous_action(
+        self,
+        function_name: str,
+        user_id: int,
+        chat_id: int,
+        arguments: Dict[str, Any],
+        stage: str,
+        risk_level: str,
+        error: str | None = None,
+    ) -> None:
+        audit_entry = {
+            "timestamp": datetime.now().isoformat(),
+            "function_name": function_name,
+            "user_id": user_id,
+            "chat_id": chat_id,
+            "arguments": arguments,
+            "risk_level": risk_level,
+            "stage": stage,
+            "error": error,
+        }
+        with open(self.audit_log_file, "a", encoding="utf-8") as file:
+            file.write(json.dumps(audit_entry, ensure_ascii=False) + "\n")

@@ -126,6 +126,32 @@ class ModularPromptBuilder:
         if not version_path.exists():
             raise ValueError(f"Версия {version} не найдена")
         (self.versions_dir / "current.txt").write_text(version_path.read_text(encoding="utf-8"), encoding="utf-8")
+        self.personality_layer = self._load_current_personality()
+
+    def list_personality_versions(self) -> list[int]:
+        versions = []
+        for path in self.versions_dir.glob("personality_v*.txt"):
+            try:
+                versions.append(int(path.stem.replace("personality_v", "")))
+            except ValueError:
+                continue
+        return sorted(versions)
+
+    def rollback_personality_version(self, target_version: int | None = None) -> int:
+        versions = self.list_personality_versions()
+        if not versions:
+            raise ValueError("Нет доступных версий personality для отката")
+
+        if target_version is None:
+            if len(versions) < 2:
+                raise ValueError("Недостаточно версий для отката")
+            target_version = versions[-2]
+        elif target_version not in versions:
+            raise ValueError(f"Версия {target_version} не найдена")
+
+        self.approve_personality_version(target_version)
+        self.personality_layer = self._load_current_personality()
+        return target_version
 
     @staticmethod
     def _default_base_core() -> str:
