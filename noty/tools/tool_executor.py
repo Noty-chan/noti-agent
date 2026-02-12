@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import hashlib
 import inspect
 import json
+import secrets
 import time
 from datetime import datetime
 from pathlib import Path
@@ -94,7 +94,7 @@ class SafeToolExecutor:
             return {"status": "forbidden", "message": "Инструмент доступен только в ЛС."}
 
         if tool_info["requires_confirmation"]:
-            confirmation_id = hashlib.md5(str(time.time()).encode()).hexdigest()[:8]
+            confirmation_id = self._generate_confirmation_id()
             self.pending_confirmations[confirmation_id] = {
                 "tool_call": tool_call,
                 "user_id": user_id,
@@ -143,7 +143,17 @@ class SafeToolExecutor:
                 )
             return {"status": "runtime_error", "message": f"Ошибка: {exc}"}
 
-    def confirm_pending(self, confirmation_id: str) -> Dict[str, Any]:
+    @staticmethod
+    def _generate_confirmation_id() -> str:
+        return secrets.token_hex(4)
+
+    def confirm_pending(
+        self,
+        confirmation_id: str,
+        *,
+        user_id: int | None = None,
+        chat_id: int | None = None,
+    ) -> Dict[str, Any]:
         if confirmation_id in self.confirmed_results:
             return {
                 **self.confirmed_results[confirmation_id],
@@ -156,6 +166,11 @@ class SafeToolExecutor:
         if time.time() > pending["expires_at"]:
             del self.pending_confirmations[confirmation_id]
             return {"status": "validation_error", "message": "Время подтверждения истекло."}
+
+        if user_id is not None and int(user_id) != int(pending["user_id"]):
+            return {"status": "forbidden", "message": "Подтверждение доступно только автору запроса."}
+        if chat_id is not None and int(chat_id) != int(pending["chat_id"]):
+            return {"status": "forbidden", "message": "Подтверждение доступно только в исходном чате."}
 
         tool_call = pending["tool_call"]
         tool_info = self.tools_registry[tool_call["name"]]
