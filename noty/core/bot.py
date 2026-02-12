@@ -15,6 +15,7 @@ from noty.memory.sqlite_db import SQLiteDBManager
 from noty.mood.mood_manager import MoodManager
 from noty.thought.monologue import InternalMonologue
 from noty.tools.tool_executor import SafeToolExecutor
+from noty.transport.types import normalize_incoming_event
 from noty.utils.metrics import MetricsCollector
 
 
@@ -46,6 +47,7 @@ class NotyBot:
         self.adaptation_engine = adaptation_engine or AdaptationEngine()
 
     def handle_message(self, event: Dict[str, Any]) -> Dict[str, Any]:
+        event = normalize_incoming_event(event).to_dict()
         chat_id = event["chat_id"]
         user_id = event["user_id"]
         text = event["text"]

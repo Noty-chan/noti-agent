@@ -5,3 +5,11 @@ bot:
   max_context_tokens: 3000
   cheap_thought_model: "meta-llama/llama-3.1-8b-instruct"
   response_model: "meta-llama/llama-3.1-70b-instruct"
+
+transport:
+  active_platforms:
+    - vk
+    - telegram
+  telegram:
+    mode: polling
+    bot_token: ""
