@@ -6,6 +6,9 @@ bot:
   cheap_thought_model: "meta-llama/llama-3.1-8b-instruct"
   response_model: "meta-llama/llama-3.1-70b-instruct"
 
+llm:
+  backend: "openai" # openai | litellm
+
 transport:
 
   active_platforms:
@@ -24,4 +27,3 @@ transport:
   timeout_seconds: 25
   state_path: "./noty/data/vk_state.json"
   dedup_cache_size: 5000
-

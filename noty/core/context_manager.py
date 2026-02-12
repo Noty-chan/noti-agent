@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import logging
 from typing import Any, Dict, List
 
 import numpy as np
@@ -11,10 +12,18 @@ from noty.filters.embedding_filter import EmbeddingFilter
 
 
 class DynamicContextBuilder:
-    def __init__(self, db_manager: Any, embedding_filter: EmbeddingFilter, max_tokens: int = 3000):
+    def __init__(
+        self,
+        db_manager: Any,
+        embedding_filter: EmbeddingFilter,
+        max_tokens: int = 3000,
+        semantic_retriever: Any | None = None,
+    ):
         self.db = db_manager
         self.embedder = embedding_filter
         self.max_tokens = max_tokens
+        self.semantic_retriever = semantic_retriever
+        self.logger = logging.getLogger(__name__)
 
     @staticmethod
     def _estimate_tokens(text: str) -> int:
@@ -105,8 +114,35 @@ class DynamicContextBuilder:
         if conflict_topics:
             context_messages = [m for m in context_messages if not any(topic in m["content"].lower() for topic in conflict_topics)]
 
+        if self.semantic_retriever:
+            semantic_snippets = self.semantic_retriever.retrieve(
+                query=current_message,
+                platform=platform,
+                chat_id=chat_id,
+                limit=3,
+            )
+            for snippet in semantic_snippets:
+                if any(m["content"] == snippet for m in context_messages):
+                    continue
+                context_messages.append(
+                    {
+                        "role": "assistant",
+                        "content": snippet,
+                        "timestamp": datetime.now().isoformat(),
+                        "source": "llamaindex",
+                    }
+                )
+
         context_messages.sort(key=lambda x: x["timestamp"])
-        summary = self._create_summary(context_messages, sources, hints)
+        atmosphere = self._estimate_chat_atmosphere(context_messages)
+        summary = self._create_summary(context_messages, sources, hints, atmosphere)
+        self.logger.info(
+            "Контекст собран: platform=%s chat_id=%s messages=%s atmosphere=%s",
+            platform,
+            chat_id,
+            len(context_messages),
+            atmosphere,
+        )
         return {
             "messages": [{"role": m["role"], "content": m["content"]} for m in context_messages],
             "summary": summary,
@@ -118,11 +154,27 @@ class DynamicContextBuilder:
                 "user_id": user_id,
                 "context_size": len(context_messages),
                 "strategy_hints": hints,
+                "chat_atmosphere": atmosphere,
             },
         }
 
     @staticmethod
-    def _create_summary(messages: List[Dict[str, Any]], sources: Dict[str, int], hints: Dict[str, Any]) -> str:
+    def _estimate_chat_atmosphere(messages: List[Dict[str, Any]]) -> str:
+        if not messages:
+            return "unknown"
+        last_text = " ".join(m.get("content", "").lower() for m in messages[-5:])
+        negative_markers = ("бесит", "туп", "ненав", "достал")
+        positive_markers = ("спасибо", "класс", "люблю", "хаха")
+        neg = sum(marker in last_text for marker in negative_markers)
+        pos = sum(marker in last_text for marker in positive_markers)
+        if neg > pos:
+            return "toxic"
+        if pos > neg:
+            return "friendly"
+        return "neutral"
+
+    @staticmethod
+    def _create_summary(messages: List[Dict[str, Any]], sources: Dict[str, int], hints: Dict[str, Any], atmosphere: str) -> str:
         if not messages:
             return "Новый диалог без предыстории."
         time_range = (datetime.fromisoformat(messages[0]["timestamp"]), datetime.fromisoformat(messages[-1]["timestamp"]))
@@ -132,6 +184,7 @@ class DynamicContextBuilder:
         return (
             "Контекст диалога:\n"
             f"- Сообщений: {len(messages)} ({sources['recent']} недавних, {sources['semantic']} релевантных, {sources['important']} важных)\n"
-            f"- Период: {time_range[0].strftime('%d.%m %H:%M')} - {time_range[1].strftime('%d.%m %H:%M')}"
+            f"- Период: {time_range[0].strftime('%d.%m %H:%M')} - {time_range[1].strftime('%d.%m %H:%M')}\n"
+            f"- Атмосфера чата: {atmosphere}"
             f"{hints_line}"
         )

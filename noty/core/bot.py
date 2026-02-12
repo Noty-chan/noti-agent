@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import logging
 from typing import Any, Dict, Mapping
 
 from noty.core.adaptation_engine import AdaptationEngine
@@ -51,6 +52,7 @@ class NotyBot:
         self.interaction_logger = interaction_logger or InteractionJSONLLogger()
         self.adaptation_engine = adaptation_engine or AdaptationEngine()
         self.response_processor = response_processor or ResponseProcessor(tool_executor=self.tool_executor)
+        self.logger = logging.getLogger(__name__)
 
     def handle_message(self, event: Mapping[str, Any]) -> Dict[str, Any]:
         payload = dict(event)
@@ -74,6 +76,18 @@ class NotyBot:
         relationship = payload.get("relationship")
         if not relationship and self.relationship_manager:
             relationship = self.relationship_manager.get_relationship(user_id)
+
+        if self._should_refuse_private_chat(event_data, relationship):
+            self.logger.info("ЛС отклонен по интересу: user_id=%s scope=%s", user_id, scope)
+            self._log_interaction(event_data, responded=False, response_text="", tools_used=[])
+            result = {
+                "status": "ignored",
+                "reason": "private_chat_uninteresting",
+                "score": 0.0,
+                "threshold": 1.0,
+            }
+            self.interaction_logger.log_outgoing(event_data, result)
+            return result
 
         self.session_store.set(
             "chat",
@@ -111,6 +125,9 @@ class NotyBot:
                 filter_stats=self.message_handler.get_filter_stats(),
             )
 
+            global_memory_summary = self._get_global_memory_summary(user_id=user_id, platform=platform, chat_id=chat_id)
+            self.logger.info("Сформирована глобальная память: user_id=%s chars=%s", user_id, len(global_memory_summary))
+
             prompt = self.message_handler.prepare_prompt(
                 platform=platform,
                 chat_id=chat_id,
@@ -126,6 +143,8 @@ class NotyBot:
                 },
                 strategy_hints=self._build_strategy_hints(payload),
             )
+            if global_memory_summary:
+                prompt = f"{prompt}\n\nGLOBAL_NOTY_MEMORY:\n{global_memory_summary}"
 
             thought_entry = self.monologue.generate_thoughts(
                 {
@@ -351,3 +370,37 @@ class NotyBot:
         )
         conn.commit()
         conn.close()
+
+    @staticmethod
+    def _relationship_score(relationship: Mapping[str, Any] | None) -> int:
+        if not relationship:
+            return 0
+        return int(relationship.get("relationship_score", relationship.get("score", 0)) or 0)
+
+    def _should_refuse_private_chat(self, event: Mapping[str, Any], relationship: Mapping[str, Any] | None) -> bool:
+        if not bool(event.get("is_private", False)):
+            return False
+        score = self._relationship_score(relationship)
+        return score <= -3
+
+    def _get_global_memory_summary(self, user_id: int, platform: str, chat_id: int) -> str:
+        if not self.mem0:
+            return ""
+        recalls = self.mem0.recall(
+            query="долгосрочные факты о пользователе и моем отношении",
+            user_id=f"user_{user_id}",
+            limit=5,
+        )
+        if not recalls:
+            return ""
+
+        parts: list[str] = []
+        for item in recalls:
+            text = item.get("text", "").strip()
+            metadata = item.get("metadata", {})
+            item_platform = metadata.get("platform", "global")
+            item_chat = metadata.get("chat_id", "*")
+            scope_mark = "global" if item_platform == platform and item_chat == chat_id else f"{item_platform}:{item_chat}"
+            if text:
+                parts.append(f"- [{scope_mark}] {text[:180]}")
+        return "\n".join(parts)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, List, Optional
 
 from openai import OpenAI
@@ -10,11 +11,13 @@ from openai import OpenAI
 class APIRotator:
     """Умная ротация между API-ключами OpenRouter."""
 
-    def __init__(self, api_keys: List[str]):
+    def __init__(self, api_keys: List[str], backend: str = "openai"):
         self.api_keys = api_keys
+        self.backend = backend
         self.current_idx = 0
         self.failed_keys = set()
         self.key_stats = {key: {"calls": 0, "errors": 0} for key in api_keys}
+        self.logger = logging.getLogger(__name__)
 
     def _get_next_key(self) -> Optional[str]:
         attempts = 0
@@ -42,7 +45,6 @@ class APIRotator:
             if not api_key:
                 raise RuntimeError("Все API ключи исчерпаны")
             try:
-                client = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=api_key)
                 call_params: Dict[str, Any] = {
                     "model": model,
                     "messages": messages,
@@ -53,7 +55,8 @@ class APIRotator:
                 if tools:
                     call_params["tools"] = tools
 
-                response = client.chat.completions.create(**call_params)
+                self.logger.info("LLM call started: backend=%s model=%s", self.backend, model)
+                response = self._call_backend(api_key=api_key, call_params=call_params)
                 self.key_stats[api_key]["calls"] += 1
                 return {
                     "content": response.choices[0].message.content,
@@ -67,6 +70,7 @@ class APIRotator:
                 }
             except Exception as exc:  # noqa: BLE001
                 error_msg = str(exc).lower()
+                self.logger.warning("LLM call failed for key idx=%s: %s", self.current_idx, error_msg)
                 if "rate_limit" in error_msg or "429" in error_msg:
                     self.failed_keys.add(api_key)
                     self.key_stats[api_key]["errors"] += 1
@@ -76,6 +80,33 @@ class APIRotator:
                     continue
                 raise
         raise RuntimeError("Все попытки вызова API провалились")
+
+    def _call_backend(self, api_key: str, call_params: Dict[str, Any]):
+        if self.backend == "litellm":
+            from litellm import completion
+
+            return completion(api_key=api_key, base_url="https://openrouter.ai/api/v1", **call_params)
+
+        client = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=api_key)
+        return client.chat.completions.create(**call_params)
+
+    def structured_call(
+        self,
+        response_model: Any,
+        messages: List[Dict[str, str]],
+        model: str = "meta-llama/llama-3.1-70b-instruct",
+        **kwargs: Any,
+    ) -> Any:
+        """Структурированный вызов через Instructor поверх OpenAI-клиента."""
+        api_key = self._get_next_key()
+        if not api_key:
+            raise RuntimeError("Нет доступного API ключа для structured_call")
+
+        import instructor
+
+        client = instructor.patch(OpenAI(base_url="https://openrouter.ai/api/v1", api_key=api_key))
+        self.logger.info("Structured LLM call started: model=%s", model)
+        return client.chat.completions.create(response_model=response_model, model=model, messages=messages, **kwargs)
 
     def get_stats(self) -> Dict[str, Any]:
         return {

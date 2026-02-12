@@ -16,6 +16,7 @@ from noty.core.events import InteractionJSONLLogger
 from noty.core.message_handler import MessageHandler
 from noty.filters.embedding_filter import EmbeddingFilter
 from noty.filters.heuristic_filter import HeuristicFilter
+from noty.memory.semantic_retriever import LlamaSemanticRetriever
 from noty.memory.sqlite_db import SQLiteDBManager
 from noty.mood.mood_manager import MoodManager
 from noty.prompts.prompt_builder import ModularPromptBuilder
@@ -37,10 +38,12 @@ def load_api_keys(path: str) -> list[str]:
 def build_bot(config: Dict[str, Any]) -> NotyBot:
     db_manager = SQLiteDBManager()
     embedding_filter = EmbeddingFilter()
+    semantic_retriever = LlamaSemanticRetriever()
     context_builder = DynamicContextBuilder(
         db_manager=db_manager,
         embedding_filter=embedding_filter,
         max_tokens=config["bot"].get("max_context_tokens", 3000),
+        semantic_retriever=semantic_retriever,
     )
     prompt_builder = ModularPromptBuilder()
     message_handler = MessageHandler(
@@ -51,7 +54,10 @@ def build_bot(config: Dict[str, Any]) -> NotyBot:
     )
     mood_manager = MoodManager()
     tool_executor = SafeToolExecutor(owner_id=config["transport"].get("owner_id", 0))
-    api_rotator = APIRotator(api_keys=load_api_keys("./noty/config/api_keys.json"))
+    api_rotator = APIRotator(
+        api_keys=load_api_keys("./noty/config/api_keys.json"),
+        backend=config.get("llm", {}).get("backend", "openai"),
+    )
     monologue = InternalMonologue(api_rotator=api_rotator, thought_logger=ThoughtLogger())
 
     return NotyBot(
