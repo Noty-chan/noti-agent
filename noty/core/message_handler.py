@@ -38,7 +38,7 @@ class MessageHandler:
         return self.should_react(normalized.text)
 
     def decide_reaction(self, message_text: str, scope: str | None = None) -> ReactionDecision:
-        with self.metrics.time_block("filter_pipeline_seconds"):
+        with self.metrics.time_block("filter_pipeline_seconds", stage="filter_pipeline", platform=scope.split(":", 1)[0] if scope else None):
             heuristic_passed = self.heuristic_filter.should_check_embeddings(message_text)
             self.metrics.inc("messages_total", scope=scope)
 
@@ -67,7 +67,7 @@ class MessageHandler:
         runtime_modifiers: Dict[str, Any] | None = None,
         strategy_hints: Dict[str, Any] | None = None,
     ) -> str:
-        with self.metrics.time_block("context_build_seconds"):
+        with self.metrics.time_block("context_build_seconds", stage="context_build", platform=platform):
             context = self.context_builder.build_context(
                 chat_id=chat_id,
                 current_message=message_text,

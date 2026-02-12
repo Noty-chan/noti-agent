@@ -100,7 +100,7 @@ class NotyBot:
             },
         )
 
-        with self.metrics.time_block("message_total_seconds"):
+        with self.metrics.time_block("message_total_seconds", stage="e2e", platform=platform):
             try:
                 decision = self.message_handler.decide_reaction(text, scope=scope)
             except TypeError:
@@ -160,9 +160,14 @@ class NotyBot:
                 cheap_model=True,
             )
 
-            with self.metrics.time_block("llm_call_seconds"):
+            with self.metrics.time_block("llm_call_seconds", stage="llm_call", platform=platform):
                 llm_response = self.api_rotator.call(messages=[{"role": "user", "content": prompt}])
             self.metrics.record_tokens(llm_response.get("usage"))
+            usage = llm_response.get("usage") or {}
+            token_cost = usage.get("cost_usd")
+            if token_cost is not None:
+                self.metrics.record_token_cost(token_cost, stage="llm_call", platform=platform)
+                self.metrics.record_token_cost(token_cost, stage="e2e", platform=platform)
 
             strategy_name = thought_entry.get("strategy", "balanced")
             if strategy_name == "harsh_sarcasm":
