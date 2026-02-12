@@ -15,3 +15,8 @@
 
 ## Структура
 См. `noty/README.md` и `TASK_MAP.md`.
+
+## Интеграции LLM/памяти
+- `LiteLLM` поддержан как альтернативный backend (`llm.backend` в `noty/config/bot_config.yaml`).
+- `Instructor` подключён для structured outputs в `APIRotator.structured_call`.
+- `LlamaIndex` добавлен как опциональный семантический ретривер для расширения контекста.

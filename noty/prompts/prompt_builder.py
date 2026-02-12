@@ -124,10 +124,16 @@ class ModularPromptBuilder:
         if not messages:
             return "КОНТЕКСТ: Начало диалога."
         formatted_messages = []
+        atmosphere = context.get("metadata", {}).get("chat_atmosphere", "unknown")
+        global_memory = context.get("global_memory", "")
         for msg in messages[-10:]:
             role = "Пользователь" if msg["role"] == "user" else "Я"
             formatted_messages.append(f"{role}: {msg['content']}")
-        return f"КОНТЕКСТ ДИАЛОГА:\n{chr(10).join(formatted_messages)}\n\n{context.get('summary', '')}"
+        global_memory_block = f"\n\nГЛОБАЛЬНАЯ ПАМЯТЬ НОТИ:\n{global_memory}" if global_memory else ""
+        return (
+            f"КОНТЕКСТ ДИАЛОГА (атмосфера: {atmosphere}):\n{chr(10).join(formatted_messages)}\n\n{context.get('summary', '')}"
+            f"{global_memory_block}"
+        )
 
     @staticmethod
     def _is_kpi_degraded(baseline: Dict[str, float], candidate: Dict[str, float], threshold: float) -> bool:
