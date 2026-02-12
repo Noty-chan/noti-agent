@@ -77,6 +77,17 @@ class SQLiteDBManager:
                 signal_source TEXT,
                 approved BOOLEAN DEFAULT FALSE
             );
+
+            CREATE TABLE IF NOT EXISTS personality_change_proposals (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TIMESTAMP,
+                author TEXT NOT NULL,
+                diff_summary TEXT NOT NULL,
+                risk TEXT NOT NULL,
+                decision TEXT DEFAULT 'pending',
+                reviewer TEXT
+            );
+
             """
         )
         cols = {row[1] for row in cur.execute("PRAGMA table_info(prompt_versions)").fetchall()}
@@ -117,3 +128,33 @@ class SQLiteDBManager:
         rows = [dict(r) for r in cur.fetchall()]
         conn.close()
         return rows
+
+
+    def create_personality_proposal(self, author: str, diff_summary: str, risk: str) -> int:
+        conn = self._connect()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO personality_change_proposals (created_at, author, diff_summary, risk)
+            VALUES (CURRENT_TIMESTAMP, ?, ?, ?)
+            """,
+            (author, diff_summary, risk),
+        )
+        proposal_id = int(cur.lastrowid)
+        conn.commit()
+        conn.close()
+        return proposal_id
+
+    def review_personality_proposal(self, proposal_id: int, decision: str, reviewer: str) -> None:
+        conn = self._connect()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE personality_change_proposals
+            SET decision = ?, reviewer = ?
+            WHERE id = ?
+            """,
+            (decision, reviewer, proposal_id),
+        )
+        conn.commit()
+        conn.close()
