@@ -9,6 +9,7 @@ from noty.filters.embedding_filter import EmbeddingFilter
 from noty.filters.heuristic_filter import HeuristicFilter
 from noty.filters.reaction_decider import ReactionDecision, ReactionDecider
 from noty.prompts.prompt_builder import ModularPromptBuilder
+from noty.transport.types import IncomingEvent, normalize_incoming_event
 from noty.utils.metrics import MetricsCollector
 
 
@@ -33,7 +34,15 @@ class MessageHandler:
         decision = self.decide_reaction(message_text)
         return decision.should_respond
 
+
+    def should_react_to_event(self, event: IncomingEvent | Dict[str, Any]) -> bool:
+        normalized = normalize_incoming_event(event)
+        return self.should_react(normalized.text)
+
+    def decide_reaction(self, message_text: str) -> ReactionDecision:
+
     def decide_reaction(self, message_text: str, scope: str | None = None) -> ReactionDecision:
+
         with self.metrics.time_block("filter_pipeline_seconds"):
             heuristic_passed = self.heuristic_filter.should_check_embeddings(message_text)
             self.metrics.inc("messages_total", scope=scope)

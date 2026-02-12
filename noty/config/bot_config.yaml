@@ -7,6 +7,14 @@ bot:
   response_model: "meta-llama/llama-3.1-70b-instruct"
 
 transport:
+
+  active_platforms:
+    - vk
+    - telegram
+  telegram:
+    mode: polling
+    bot_token: ""
+
   mode: "dry_run" # vk_longpoll | vk_webhook | dry_run
   owner_id: 0
   vk_token: ""
@@ -16,3 +24,4 @@ transport:
   timeout_seconds: 25
   state_path: "./noty/data/vk_state.json"
   dedup_cache_size: 5000
+
