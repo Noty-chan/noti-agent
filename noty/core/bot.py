@@ -7,6 +7,7 @@ from typing import Any, Dict
 
 from noty.core.adaptation_engine import AdaptationEngine
 from noty.core.api_rotator import APIRotator
+from noty.core.response_processor import ResponseProcessor
 from noty.core.message_handler import MessageHandler
 from noty.memory.mem0_wrapper import Mem0Wrapper
 from noty.memory.relationship_manager import RelationshipManager
@@ -44,6 +45,7 @@ class NotyBot:
         self.session_store = session_store or SessionStateStore()
         self.metrics = metrics or MetricsCollector()
         self.adaptation_engine = adaptation_engine or AdaptationEngine()
+        self.response_processor = ResponseProcessor(tool_executor=self.tool_executor)
 
     def handle_message(self, event: Dict[str, Any]) -> Dict[str, Any]:
         chat_id = event["chat_id"]
@@ -121,8 +123,17 @@ class NotyBot:
                 self.mood_manager.update_on_event("annoying_message")
             else:
                 self.mood_manager.update_on_event("interesting_topic")
+            processing_result = self.response_processor.process(
+                llm_response,
+                user_id=user_id,
+                chat_id=chat_id,
+                is_private=bool(event.get("is_private", False)),
+            )
+
+            self._apply_tool_post_processing(processing_result.tool_results)
+
             mood_after = self.mood_manager.get_current_state()
-            response_text = llm_response.get("content", "")
+            response_text = processing_result.text
 
             self._log_interaction(
                 event,
@@ -130,9 +141,9 @@ class NotyBot:
                 response_text=response_text,
                 mood_before=mood_state["mood"],
                 mood_after=mood_after["mood"],
-                tools_used=[],
+                tools_used=processing_result.tools_used,
             )
-            outcome = event.get("interaction_outcome", "success")
+            outcome = event.get("interaction_outcome", processing_result.outcome)
             self._update_memory_after_response(
                 event,
                 response_text=response_text,
@@ -148,14 +159,29 @@ class NotyBot:
             )
 
             return {
-                "status": "responded",
+                "status": "responded" if processing_result.status == "success" else processing_result.status,
                 "text": response_text,
                 "usage": llm_response.get("usage", {}),
                 "finish_reason": llm_response.get("finish_reason"),
+                "tool_results": processing_result.tool_results,
                 "metrics": self.metrics.snapshot(),
                 "filter_stats": self.message_handler.get_filter_stats(),
                 "adaptation": recommendation,
             }
+
+
+    def _apply_tool_post_processing(self, tool_results: list[Dict[str, Any]]) -> None:
+        if not tool_results:
+            return
+
+        for result in tool_results:
+            status = result.get("status")
+            if status == "success":
+                self.mood_manager.update_on_event("interesting_topic", {"energy_cost": 1})
+            elif status == "awaiting_confirmation":
+                self.mood_manager.update_on_event("interesting_topic", {"energy_cost": 0})
+            elif status in {"forbidden", "validation_error", "runtime_error"}:
+                self.mood_manager.update_on_event("insulted", {"energy_cost": 1})
 
     def _log_interaction(
         self,
