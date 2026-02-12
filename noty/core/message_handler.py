@@ -60,9 +60,10 @@ class MessageHandler:
         energy: int = 100,
         user_relationship: Dict[str, Any] | None = None,
         runtime_modifiers: Dict[str, Any] | None = None,
+        strategy_hints: Dict[str, Any] | None = None,
     ) -> str:
         with self.metrics.time_block("context_build_seconds"):
-            context = self.context_builder.build_context(chat_id, message_text, user_id)
+            context = self.context_builder.build_context(chat_id, message_text, user_id, strategy_hints=strategy_hints)
         return self.prompt_builder.build_full_prompt(
             context=context,
             mood=mood,

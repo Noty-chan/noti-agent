@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List
@@ -41,12 +42,63 @@ class ThoughtLogger:
 
 
 class InternalMonologue:
+    QUALITY_GATE_THRESHOLD = 0.45
+
+    @dataclass(frozen=True)
+    class ResponseStrategy:
+        name: str
+        sarcasm_level: float
+        response_style: str
+        max_sentences: int
+        allowed_tool_risk: List[str]
+        require_confirmation_escalation: bool = False
+
+    STRATEGY_LIBRARY: Dict[str, ResponseStrategy] = {
+        "playful_sarcasm": ResponseStrategy(
+            name="playful_sarcasm",
+            sarcasm_level=0.65,
+            response_style="conversational",
+            max_sentences=4,
+            allowed_tool_risk=["low", "medium"],
+        ),
+        "harsh_sarcasm": ResponseStrategy(
+            name="harsh_sarcasm",
+            sarcasm_level=0.85,
+            response_style="sharp",
+            max_sentences=3,
+            allowed_tool_risk=["low"],
+            require_confirmation_escalation=True,
+        ),
+        "dry_brief": ResponseStrategy(
+            name="dry_brief",
+            sarcasm_level=0.25,
+            response_style="brief",
+            max_sentences=2,
+            allowed_tool_risk=["low"],
+        ),
+        "balanced": ResponseStrategy(
+            name="balanced",
+            sarcasm_level=0.4,
+            response_style="balanced",
+            max_sentences=4,
+            allowed_tool_risk=["low", "medium"],
+        ),
+        "conservative": ResponseStrategy(
+            name="conservative",
+            sarcasm_level=0.05,
+            response_style="formal_brief",
+            max_sentences=2,
+            allowed_tool_risk=["low"],
+            require_confirmation_escalation=True,
+        ),
+    }
+
     def __init__(self, api_rotator: APIRotator, thought_logger: ThoughtLogger):
         self.api = api_rotator
         self.logger = thought_logger
 
     @staticmethod
-    def _extract_strategy(thoughts: List[str], mood: str) -> str:
+    def _extract_strategy_name(thoughts: List[str], mood: str) -> str:
         joined = " ".join(thoughts).lower()
         if "игрив" in joined or "шут" in joined:
             return "playful_sarcasm"
@@ -59,6 +111,12 @@ class InternalMonologue:
         if mood == "irritated":
             return "harsh_sarcasm"
         return "balanced"
+
+    @classmethod
+    def _resolve_strategy(cls, strategy_name: str, quality: float) -> ResponseStrategy:
+        if quality < cls.QUALITY_GATE_THRESHOLD:
+            return cls.STRATEGY_LIBRARY["conservative"]
+        return cls.STRATEGY_LIBRARY.get(strategy_name, cls.STRATEGY_LIBRARY["balanced"])
 
     @staticmethod
     def _evaluate_quality(thoughts: List[str]) -> float:
@@ -86,8 +144,9 @@ class InternalMonologue:
         model = "meta-llama/llama-3.1-8b-instruct" if cheap_model else "meta-llama/llama-3.1-70b-instruct"
         response = self.api.call(messages=[{"role": "user", "content": prompt}], model=model, temperature=0.8, max_tokens=300)
         thoughts = [line.strip().lstrip("0123456789.-) ") for line in response["content"].split("\n") if line.strip()]
-        strategy = self._extract_strategy(thoughts, mood=context.get("mood", "neutral"))
+        strategy_name = self._extract_strategy_name(thoughts, mood=context.get("mood", "neutral"))
         quality = self._evaluate_quality(thoughts)
+        strategy = self._resolve_strategy(strategy_name, quality)
         decision = "respond" if quality >= 0.35 else "ignore"
 
         thought_entry = {
@@ -97,11 +156,14 @@ class InternalMonologue:
             "user_id": context.get("user_id"),
             "username": context.get("username"),
             "trigger": "message_received",
+            "interaction_id": context.get("interaction_id"),
             "message": context.get("message"),
             "thoughts": thoughts,
             "decision": decision,
-            "strategy": strategy,
+            "strategy": strategy.name,
+            "applied_strategy": asdict(strategy),
             "quality_score": quality,
+            "quality_gate_threshold": self.QUALITY_GATE_THRESHOLD,
             "mood_before": context.get("mood"),
             "energy_before": context.get("energy"),
         }
