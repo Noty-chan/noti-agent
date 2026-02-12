@@ -48,6 +48,7 @@ class SQLiteDBManager:
             CREATE TABLE IF NOT EXISTS interactions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 timestamp TIMESTAMP,
+                platform TEXT DEFAULT 'unknown',
                 chat_id INTEGER,
                 user_id INTEGER,
                 message_text TEXT,
@@ -79,40 +80,46 @@ class SQLiteDBManager:
             );
             """
         )
+        interaction_cols = {row[1] for row in cur.execute("PRAGMA table_info(interactions)").fetchall()}
+        if "platform" not in interaction_cols:
+            cur.execute("ALTER TABLE interactions ADD COLUMN platform TEXT DEFAULT 'unknown'")
+        # Backfill policy: все legacy записи без platform маркируем как unknown.
+        cur.execute("UPDATE interactions SET platform='unknown' WHERE platform IS NULL OR platform='' ")
+
         cols = {row[1] for row in cur.execute("PRAGMA table_info(prompt_versions)").fetchall()}
         if "signal_source" not in cols:
             cur.execute("ALTER TABLE prompt_versions ADD COLUMN signal_source TEXT DEFAULT ''")
         conn.commit()
         conn.close()
 
-    def get_recent_messages(self, chat_id: int, limit: int = 5) -> List[Dict[str, Any]]:
+    def get_recent_messages(self, platform: str, chat_id: int, limit: int = 5) -> List[Dict[str, Any]]:
         conn = self._connect()
         cur = conn.cursor()
         cur.execute(
-            "SELECT user_id, message_text as text, timestamp FROM interactions WHERE chat_id=? ORDER BY id DESC LIMIT ?",
-            (chat_id, limit),
+            "SELECT user_id, message_text as text, timestamp FROM interactions WHERE platform=? AND chat_id=? ORDER BY id DESC LIMIT ?",
+            (platform, chat_id, limit),
         )
         rows = [dict(r) for r in cur.fetchall()]
         conn.close()
         return list(reversed(rows))
 
-    def get_messages_range(self, chat_id: int, days_ago: int = 7, exclude_recent: int = 5) -> List[Dict[str, Any]]:
+    def get_messages_range(self, platform: str, chat_id: int, days_ago: int = 7, exclude_recent: int = 5) -> List[Dict[str, Any]]:
         conn = self._connect()
         cur = conn.cursor()
         cur.execute(
-            "SELECT user_id, message_text as text, timestamp FROM interactions WHERE chat_id=? ORDER BY id DESC LIMIT 200",
-            (chat_id,),
+            "SELECT user_id, message_text as text, timestamp FROM interactions WHERE platform=? AND chat_id=? ORDER BY id DESC LIMIT 200",
+            (platform, chat_id),
         )
         rows = [dict(r) for r in cur.fetchall()][exclude_recent:]
         conn.close()
         return list(reversed(rows))
 
-    def get_important_messages(self, chat_id: int, days_ago: int = 7) -> List[Dict[str, Any]]:
+    def get_important_messages(self, platform: str, chat_id: int, days_ago: int = 7) -> List[Dict[str, Any]]:
         conn = self._connect()
         cur = conn.cursor()
         cur.execute(
-            "SELECT user_id, message_text as text, timestamp, 'question_or_mention' as type FROM interactions WHERE chat_id=? AND message_text LIKE '%?%' ORDER BY id DESC LIMIT 20",
-            (chat_id,),
+            "SELECT user_id, message_text as text, timestamp, 'question_or_mention' as type FROM interactions WHERE platform=? AND chat_id=? AND message_text LIKE '%?%' ORDER BY id DESC LIMIT 20",
+            (platform, chat_id),
         )
         rows = [dict(r) for r in cur.fetchall()]
         conn.close()

@@ -20,12 +20,12 @@ class DynamicContextBuilder:
     def _estimate_tokens(text: str) -> int:
         return len(text) // 4
 
-    def build_context(self, chat_id: int, current_message: str, user_id: int) -> Dict[str, Any]:
+    def build_context(self, platform: str, chat_id: int, current_message: str, user_id: int) -> Dict[str, Any]:
         context_messages: List[Dict[str, Any]] = []
         used_tokens = 0
         sources = {"recent": 0, "semantic": 0, "important": 0}
 
-        recent_messages = self.db.get_recent_messages(chat_id, limit=5)
+        recent_messages = self.db.get_recent_messages(platform, chat_id, limit=5)
         for msg in recent_messages:
             msg_tokens = self._estimate_tokens(msg["text"])
             if used_tokens + msg_tokens <= self.max_tokens:
@@ -40,7 +40,7 @@ class DynamicContextBuilder:
                 used_tokens += msg_tokens
                 sources["recent"] += 1
 
-        past_messages = self.db.get_messages_range(chat_id, days_ago=7, exclude_recent=5)
+        past_messages = self.db.get_messages_range(platform, chat_id, days_ago=7, exclude_recent=5)
         if past_messages:
             msg_texts = [m["text"] for m in past_messages]
             current_emb = self.embedder.encoder.encode(current_message)
@@ -70,7 +70,7 @@ class DynamicContextBuilder:
                         used_tokens += msg_tokens
                         sources["semantic"] += 1
 
-        important_messages = self.db.get_important_messages(chat_id, days_ago=7)
+        important_messages = self.db.get_important_messages(platform, chat_id, days_ago=7)
         for msg in important_messages:
             if any(m["content"] == msg["text"] for m in context_messages):
                 continue
@@ -95,7 +95,12 @@ class DynamicContextBuilder:
             "summary": summary,
             "total_tokens": used_tokens,
             "sources": sources,
-            "metadata": {"chat_id": chat_id, "user_id": user_id, "context_size": len(context_messages)},
+            "metadata": {
+                "platform": platform,
+                "chat_id": chat_id,
+                "user_id": user_id,
+                "context_size": len(context_messages),
+            },
         }
 
     @staticmethod

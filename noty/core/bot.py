@@ -7,6 +7,7 @@ from typing import Any, Dict
 
 from noty.core.adaptation_engine import AdaptationEngine
 from noty.core.api_rotator import APIRotator
+from noty.core.events import enrich_event_scope
 from noty.core.message_handler import MessageHandler
 from noty.memory.mem0_wrapper import Mem0Wrapper
 from noty.memory.relationship_manager import RelationshipManager
@@ -46,16 +47,20 @@ class NotyBot:
         self.adaptation_engine = adaptation_engine or AdaptationEngine()
 
     def handle_message(self, event: Dict[str, Any]) -> Dict[str, Any]:
+        event = enrich_event_scope(event)
+        scope = event["scope"]
         chat_id = event["chat_id"]
         user_id = event["user_id"]
         text = event["text"]
+        platform = event["platform"]
 
         relationship = event.get("relationship")
         if not relationship and self.relationship_manager:
             relationship = self.relationship_manager.get_relationship(user_id)
 
         self.session_store.set(
-            f"chat:{chat_id}",
+            "chat",
+            scope,
             {
                 "last_user_id": user_id,
                 "last_message": text,
@@ -65,7 +70,7 @@ class NotyBot:
         )
 
         with self.metrics.time_block("message_total_seconds"):
-            decision = self.message_handler.decide_reaction(text)
+            decision = self.message_handler.decide_reaction(text, scope=scope)
             if not decision.should_respond:
                 self._log_interaction(event, responded=False, response_text="", tools_used=[])
                 return {
@@ -90,6 +95,7 @@ class NotyBot:
             }
             prompt = self.message_handler.prepare_prompt(
                 chat_id=chat_id,
+                platform=platform,
                 user_id=user_id,
                 message_text=text,
                 mood=mood_state["mood"],
@@ -115,7 +121,7 @@ class NotyBot:
             with self.metrics.time_block("llm_call_seconds"):
                 llm_response = self.api_rotator.call(messages=[{"role": "user", "content": prompt}])
 
-            self.metrics.record_tokens(llm_response.get("usage"))
+            self.metrics.record_tokens(llm_response.get("usage"), scope=scope)
             strategy = thought_entry.get("strategy", "balanced")
             if strategy == "harsh_sarcasm":
                 self.mood_manager.update_on_event("annoying_message")
@@ -172,11 +178,12 @@ class NotyBot:
         cur = conn.cursor()
         cur.execute(
             """
-            INSERT INTO interactions (timestamp, chat_id, user_id, message_text, noty_responded, response_text, mood_before, mood_after, tools_used)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO interactions (timestamp, platform, chat_id, user_id, message_text, noty_responded, response_text, mood_before, mood_after, tools_used)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 datetime.now().isoformat(),
+                event.get("platform", "unknown"),
                 event["chat_id"],
                 event["user_id"],
                 event["text"],
@@ -215,7 +222,7 @@ class NotyBot:
                 message=event["text"],
                 response=response_text,
                 outcome=outcome,
-                metadata={"chat_id": event["chat_id"]},
+                metadata={"platform": event.get("platform", "unknown"), "chat_id": event["chat_id"]},
             )
 
     def _adapt_behavior_after_response(

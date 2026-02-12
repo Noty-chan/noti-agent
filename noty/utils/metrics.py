@@ -13,21 +13,28 @@ class MetricsCollector:
     """Лёгкий in-memory сборщик метрик для отладки и мониторинга."""
 
     counters: Dict[str, int] = field(default_factory=lambda: defaultdict(int))
+    scoped_counters: Dict[str, Dict[str, int]] = field(default_factory=lambda: defaultdict(lambda: defaultdict(int)))
     timings: Dict[str, Dict[str, float]] = field(default_factory=lambda: defaultdict(lambda: {"count": 0, "total": 0.0, "max": 0.0}))
     token_usage: Dict[str, int] = field(default_factory=lambda: defaultdict(int))
+    scoped_token_usage: Dict[str, Dict[str, int]] = field(default_factory=lambda: defaultdict(lambda: defaultdict(int)))
 
-    def inc(self, key: str, value: int = 1) -> None:
+    def inc(self, key: str, value: int = 1, scope: str | None = None) -> None:
         self.counters[key] += value
+        if scope:
+            self.scoped_counters[scope][key] += value
 
-    def record_tokens(self, usage: Dict[str, Any] | None) -> None:
+    def record_tokens(self, usage: Dict[str, Any] | None, scope: str | None = None) -> None:
         if not usage:
             return
         for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
             raw = usage.get(key, 0)
             try:
-                self.token_usage[key] += int(raw)
+                amount = int(raw)
             except (TypeError, ValueError):
                 continue
+            self.token_usage[key] += amount
+            if scope:
+                self.scoped_token_usage[scope][key] += amount
 
     def time_block(self, metric_name: str):
         collector = self
@@ -56,7 +63,16 @@ class MetricsCollector:
                 "max_seconds": round(values["max"], 4),
             }
         return {
-            "counters": dict(self.counters),
+            "global": {
+                "counters": dict(self.counters),
+                "token_usage": dict(self.token_usage),
+            },
+            "scope": {
+                scope: {
+                    "counters": dict(counters),
+                    "token_usage": dict(self.scoped_token_usage.get(scope, {})),
+                }
+                for scope, counters in self.scoped_counters.items()
+            },
             "timings": avg_timings,
-            "token_usage": dict(self.token_usage),
         }
