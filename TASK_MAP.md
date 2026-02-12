@@ -94,7 +94,7 @@
   **Тестовый артефакт:** `tests/test_session_state.py` + новый `tests/test_session_state_ttl_namespaces.py`.
 
 ### Фаза 9: Полировка
-- [ ] Ввести performance-бюджет в `noty/utils/metrics.py`:
+- [x] Ввести performance-бюджет в `noty/utils/metrics.py`:
   - p50 e2e latency ≤ 1200 ms,
   - p95 e2e latency ≤ 2500 ms,
   - token-cost ≤ 0.020 USD / сообщение,
@@ -147,7 +147,7 @@
 | 8. Изоляция динамического контекста | `tests/test_multichat_isolation.py` | `recent/semantic/important` не содержат чужие сообщения. | нужно обновить |
 | 8. Contract routing-key и поля события | `tests/test_transport_event_contract.py` | `platform/chat_id/user_id` обязательны, routing-key стабилен. | нужно обновить |
 | 8. TTL на уровне namespace | `tests/test_session_state.py`, `tests/test_session_state_ttl_namespaces.py` | Истекает только целевой namespace. | нужно добавить |
-| 9. Метрики p50/p95 + token-cost по stage | `tests/test_metrics_pipeline_stages.py` | Метрики экспортируются по этапам и платформам. | нужно добавить |
+| 9. Метрики p50/p95 + token-cost по stage | `tests/test_metrics_pipeline_stages.py` | Метрики экспортируются по этапам и платформам. | сделано |
 | 9. Embedding cache + batching | `tests/test_embedding_cache_batching.py` | cache-hit на повторе, меньше внешних вызовов в батче. | нужно добавить |
 | 9. Adaptive provider fallback | `tests/test_api_rotator_adaptive_fallback.py` | Автопереключение при деградации latency/error. | нужно добавить |
 | 9. Respond-rate alerts | `tests/test_respond_rate_alerts.py` | Алерт за пределами 20% ± 5 п.п. с причиной. | нужно добавить |
