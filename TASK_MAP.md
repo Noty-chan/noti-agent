@@ -32,6 +32,8 @@
 - [x] Добавить заготовки chat-control и pc commands.
 - [x] Внедрить real-platform вызовы бан/мут/удаление сообщений.
 - [x] Добавить журнал действий модерации в `data/logs/actions`.
+- [x] Добавить post-processing tool execution pipeline (ResponseProcessor + tools_used/relationship/mood updates).
+- [x] Стандартизировать статусы SafeToolExecutor и добавить idempotency подтверждений.
 
 ## F. Внутренний монолог (раздел «Мысленный монолог»)
 - [x] Добавить генерацию внутреннего монолога отдельным вызовом.

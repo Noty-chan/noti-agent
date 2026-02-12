@@ -12,7 +12,11 @@ from noty.core.events import IncomingEvent, InteractionJSONLLogger
 from noty.core.adaptation_engine import AdaptationEngine
 
 from noty.core.api_rotator import APIRotator
+
+from noty.core.response_processor import ResponseProcessor
+
 from noty.core.events import enrich_event_scope
+
 from noty.core.message_handler import MessageHandler
 from noty.memory.mem0_wrapper import Mem0Wrapper
 from noty.memory.relationship_manager import RelationshipManager
@@ -65,7 +69,11 @@ class NotyBot:
         text = event.text
 
         self.adaptation_engine = adaptation_engine or AdaptationEngine()
+
+        self.response_processor = ResponseProcessor(tool_executor=self.tool_executor)
+
         self.response_processor = response_processor or ResponseProcessor()
+
 
     def handle_message(self, event: Dict[str, Any]) -> Dict[str, Any]:
         event = enrich_event_scope(event)
@@ -173,7 +181,19 @@ class NotyBot:
                 self.mood_manager.update_on_event("annoying_message")
             else:
                 self.mood_manager.update_on_event("interesting_topic")
+            processing_result = self.response_processor.process(
+                llm_response,
+                user_id=user_id,
+                chat_id=chat_id,
+                is_private=bool(event.get("is_private", False)),
+            )
+
+            self._apply_tool_post_processing(processing_result.tool_results)
+
             mood_after = self.mood_manager.get_current_state()
+
+            response_text = processing_result.text
+
             response_text = processed_response["text"]
 
             tool_calls = processed_response.get("selected_tools", [])
@@ -192,15 +212,20 @@ class NotyBot:
                     is_private=event.get("is_private", False),
                 )
 
+
             self._log_interaction(
                 event,
                 responded=True,
                 response_text=response_text,
                 mood_before=mood_state["mood"],
                 mood_after=mood_after["mood"],
+
+                tools_used=processing_result.tools_used,
+
                 tools_used=tools_used,
+
             )
-            outcome = event.get("interaction_outcome", "success")
+            outcome = event.get("interaction_outcome", processing_result.outcome)
             self._update_memory_after_response(
                 event,
                 response_text=response_text,
@@ -220,12 +245,20 @@ class NotyBot:
 
             return {
 
+                "status": "responded" if processing_result.status == "success" else processing_result.status,
+                "text": response_text,
+                "usage": llm_response.get("usage", {}),
+                "finish_reason": llm_response.get("finish_reason"),
+                "tool_results": processing_result.tool_results,
+
+
                 "status": "responded",
                 "text": response_text,
                 "usage": llm_response.get("usage", {}),
                 "finish_reason": llm_response.get("finish_reason"),
                 "strategy": processed_response.get("strategy_used", {}),
                 "interaction_id": interaction_id,
+
                 "metrics": self.metrics.snapshot(),
                 "filter_stats": self.message_handler.get_filter_stats(),
                 "adaptation": recommendation,
@@ -243,6 +276,20 @@ class NotyBot:
         if event.get("previous_interaction_outcome") == "fail":
             hints.setdefault("avoid_topics", []).append("конфликт")
         return hints
+
+
+    def _apply_tool_post_processing(self, tool_results: list[Dict[str, Any]]) -> None:
+        if not tool_results:
+            return
+
+        for result in tool_results:
+            status = result.get("status")
+            if status == "success":
+                self.mood_manager.update_on_event("interesting_topic", {"energy_cost": 1})
+            elif status == "awaiting_confirmation":
+                self.mood_manager.update_on_event("interesting_topic", {"energy_cost": 0})
+            elif status in {"forbidden", "validation_error", "runtime_error"}:
+                self.mood_manager.update_on_event("insulted", {"energy_cost": 1})
 
     def _log_interaction(
         self,
@@ -311,7 +358,7 @@ class NotyBot:
                 outcome=outcome,
 
                 metadata={"platform": event.get("platform", "unknown"), "chat_id": event["chat_id"]},
-=======
+
                 metadata={"chat_id": event.chat_id},
 
             )
