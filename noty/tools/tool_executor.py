@@ -72,9 +72,6 @@ class SafeToolExecutor:
             return {"status": "validation_error", "message": "Аргументы инструмента должны быть объектом."}
 
         if tool_info["requires_owner"] and user_id != self.owner_id:
-
-            return {"status": "forbidden", "message": "Недостаточно прав."}
-
             if self._is_personality_action(function_name):
                 self._audit_dangerous_action(
                     function_name=function_name,
@@ -85,6 +82,7 @@ class SafeToolExecutor:
                     risk_level=tool_info.get("risk_level", "high"),
                     error="owner_only",
                 )
+            return {"status": "forbidden", "message": "Недостаточно прав."}
 
         if tool_info["requires_private"] and not is_private:
             return {"status": "forbidden", "message": "Инструмент доступен только в ЛС."}
@@ -126,13 +124,8 @@ class SafeToolExecutor:
                 )
             return {"status": "success", "result": result, "message": f"✅ Выполнено: {function_name}"}
         except Exception as exc:  # noqa: BLE001
-
             self._log_execution(function_name, user_id, chat_id, arguments, None, "runtime_error", str(exc))
-            if tool_info.get("risk_level") in {"high", "critical"}:
-
-            self._log_execution(function_name, user_id, chat_id, arguments, None, "error", str(exc))
             if self._is_personality_action(function_name) or tool_info.get("risk_level") in {"high", "critical"}:
-
                 self._audit_dangerous_action(
                     function_name=function_name,
                     user_id=user_id,
