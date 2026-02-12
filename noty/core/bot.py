@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Dict
 
+from noty.core.adaptation_engine import AdaptationEngine
 from noty.core.api_rotator import APIRotator
 from noty.core.message_handler import MessageHandler
 from noty.memory.mem0_wrapper import Mem0Wrapper
@@ -30,6 +31,7 @@ class NotyBot:
         relationship_manager: RelationshipManager | None = None,
         session_store: SessionStateStore | None = None,
         metrics: MetricsCollector | None = None,
+        adaptation_engine: AdaptationEngine | None = None,
     ):
         self.api_rotator = api_rotator
         self.message_handler = message_handler
@@ -41,6 +43,7 @@ class NotyBot:
         self.relationship_manager = relationship_manager
         self.session_store = session_store or SessionStateStore()
         self.metrics = metrics or MetricsCollector()
+        self.adaptation_engine = adaptation_engine or AdaptationEngine()
 
     def handle_message(self, event: Dict[str, Any]) -> Dict[str, Any]:
         chat_id = event["chat_id"]
@@ -73,6 +76,18 @@ class NotyBot:
                 }
 
             mood_state = self.mood_manager.get_current_state()
+            relationship_trend = self.relationship_manager.get_relationship_trend(user_id) if self.relationship_manager else {}
+            pre_recommendation = self.adaptation_engine.recommend(
+                interaction_outcome="success",
+                user_feedback_signals=event.get("feedback_signals", {}),
+                relationship_trend=relationship_trend,
+                filter_stats=self.message_handler.get_filter_stats(),
+            )
+            runtime_modifiers = {
+                "preferred_tone": pre_recommendation.preferred_tone,
+                "sarcasm_level": pre_recommendation.sarcasm_level,
+                "response_rate_bias": pre_recommendation.response_rate_bias,
+            }
             prompt = self.message_handler.prepare_prompt(
                 chat_id=chat_id,
                 user_id=user_id,
@@ -80,6 +95,7 @@ class NotyBot:
                 mood=mood_state["mood"],
                 energy=mood_state["energy"],
                 user_relationship=relationship,
+                runtime_modifiers=runtime_modifiers,
             )
 
             thought_entry = self.monologue.generate_thoughts(
@@ -116,12 +132,19 @@ class NotyBot:
                 mood_after=mood_after["mood"],
                 tools_used=[],
             )
+            outcome = event.get("interaction_outcome", "success")
             self._update_memory_after_response(
                 event,
                 response_text=response_text,
-                outcome="success",
+                outcome=outcome,
                 tone_used=strategy,
                 thought_quality=thought_entry.get("quality_score", 0.0),
+            )
+
+            recommendation = self._adapt_behavior_after_response(
+                event=event,
+                outcome=outcome,
+                filter_stats=self.message_handler.get_filter_stats(),
             )
 
             return {
@@ -131,6 +154,7 @@ class NotyBot:
                 "finish_reason": llm_response.get("finish_reason"),
                 "metrics": self.metrics.snapshot(),
                 "filter_stats": self.message_handler.get_filter_stats(),
+                "adaptation": recommendation,
             }
 
     def _log_interaction(
@@ -193,3 +217,78 @@ class NotyBot:
                 outcome=outcome,
                 metadata={"chat_id": event["chat_id"]},
             )
+
+    def _adapt_behavior_after_response(
+        self,
+        event: Dict[str, Any],
+        outcome: str,
+        filter_stats: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        relationship_trend = self.relationship_manager.get_relationship_trend(event["user_id"]) if self.relationship_manager else {}
+        recommendation = self.adaptation_engine.recommend(
+            interaction_outcome=outcome,
+            user_feedback_signals=event.get("feedback_signals", {}),
+            relationship_trend=relationship_trend,
+            filter_stats=filter_stats,
+        )
+        approved = outcome == "success" and not recommendation.rollback_required
+        applied_version = self.message_handler.prompt_builder.current_personality_version
+        rollback_version = None
+        if recommendation.rollback_required:
+            try:
+                rollback_version = self.message_handler.prompt_builder.rollback_personality_version()
+                applied_version = rollback_version
+                approved = False
+            except ValueError:
+                rollback_version = None
+
+        self._log_prompt_adjustment(
+            reason=recommendation.reason,
+            signal_source=recommendation.signal_source,
+            approved=approved,
+            personality_layer=(
+                f"tone={recommendation.preferred_tone}; "
+                f"sarcasm={recommendation.sarcasm_level:.2f}; "
+                f"response_rate_bias={recommendation.response_rate_bias:+.2f}; "
+                f"version=v{applied_version}; rollback={rollback_version}"
+            ),
+            mood_layer=self.mood_manager.get_current_state()["mood"],
+        )
+
+        return {
+            "preferred_tone": recommendation.preferred_tone,
+            "sarcasm_level": recommendation.sarcasm_level,
+            "response_rate_bias": recommendation.response_rate_bias,
+            "rollback_applied": rollback_version is not None,
+            "rollback_version": rollback_version,
+            "approved": approved,
+        }
+
+    def _log_prompt_adjustment(
+        self,
+        reason: str,
+        signal_source: str,
+        approved: bool,
+        personality_layer: str,
+        mood_layer: str,
+    ) -> None:
+        if not self.db_manager:
+            return
+        conn = self.db_manager._connect()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO prompt_versions (created_at, personality_layer, mood_layer, reason_for_change, signal_source, approved)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                datetime.now().isoformat(),
+                personality_layer,
+                mood_layer,
+                reason,
+                signal_source,
+                int(approved),
+            ),
+        )
+        conn.commit()
+        conn.close()

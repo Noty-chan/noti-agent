@@ -74,10 +74,14 @@ class SQLiteDBManager:
                 personality_layer TEXT,
                 mood_layer TEXT,
                 reason_for_change TEXT,
+                signal_source TEXT,
                 approved BOOLEAN DEFAULT FALSE
             );
             """
         )
+        cols = {row[1] for row in cur.execute("PRAGMA table_info(prompt_versions)").fetchall()}
+        if "signal_source" not in cols:
+            cur.execute("ALTER TABLE prompt_versions ADD COLUMN signal_source TEXT DEFAULT ''")
         conn.commit()
         conn.close()
 
