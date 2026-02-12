@@ -7,6 +7,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from .governance import ApprovalDecision, PersonalityProposal, RollbackEvent
+
 
 class ModularPromptBuilder:
     def __init__(self, prompts_dir: str = "./noty/prompts"):
@@ -126,6 +128,89 @@ class ModularPromptBuilder:
             role = "Пользователь" if msg["role"] == "user" else "Я"
             formatted_messages.append(f"{role}: {msg['content']}")
         return f"КОНТЕКСТ ДИАЛОГА:\n{chr(10).join(formatted_messages)}\n\n{context.get('summary', '')}"
+
+    @staticmethod
+    def _is_kpi_degraded(baseline: Dict[str, float], candidate: Dict[str, float], threshold: float) -> bool:
+        for metric, before in baseline.items():
+            if before <= 0:
+                continue
+            after = candidate.get(metric, before)
+            if after < before * (1 - threshold):
+                return True
+        return False
+
+    def dry_run_preview(self, proposal: PersonalityProposal, context: Dict[str, Any], mood: str = "neutral", energy: int = 100) -> Dict[str, Any]:
+        preview_personality = (
+            f"{proposal.new_personality_text}\n\n"
+            "RUNTIME PERSONALITY MODIFIERS:\n"
+            f"- personality_version: dry-run:{proposal.proposal_id}\n"
+            "- preferred_tone: medium_sarcasm\n"
+            "- sarcasm_level: 0.50 (0..1)\n"
+            "- response_rate_bias: +0.00"
+        )
+        prompt = (
+            f"{self.base_core}\n\n"
+            "═══════════════════════════════════════════════════════════\n\n"
+            f"{preview_personality}\n\n"
+            "═══════════════════════════════════════════════════════════\n\n"
+            f"{self._generate_mood_layer(mood, energy)}\n\n"
+            "═══════════════════════════════════════════════════════════\n\n"
+            f"{self._generate_relationships_layer(None)}\n\n"
+            "═══════════════════════════════════════════════════════════\n\n"
+            f"{self._format_context(context)}\n\n"
+            "═══════════════════════════════════════════════════════════\n\n"
+            f"{self.safety_rules}"
+        )
+        return {
+            "proposal_id": proposal.proposal_id,
+            "preview_prompt": prompt,
+            "status": "dry_run",
+        }
+
+    def approve_with_kpi_guardrails(
+        self,
+        proposal: PersonalityProposal,
+        decision: ApprovalDecision,
+        baseline_kpi: Dict[str, float],
+        candidate_kpi: Dict[str, float],
+        degradation_threshold: float = 0.05,
+    ) -> Dict[str, Any]:
+        if decision.decision.lower() != "approve":
+            proposal.status = "rejected"
+            return {"status": "rejected", "decision": decision.to_dict(), "proposal": proposal.to_dict()}
+
+        previous_version = self.current_personality_version
+        new_version = self.save_new_personality_version(proposal.new_personality_text, decision.reason)
+        self.approve_personality_version(new_version)
+        proposal.status = "approved"
+
+        if self._is_kpi_degraded(baseline_kpi, candidate_kpi, degradation_threshold):
+            rollback_to = self.rollback_personality_version(previous_version)
+            rollback_event = RollbackEvent(
+                proposal_id=proposal.proposal_id,
+                from_version=new_version,
+                to_version=rollback_to,
+                trigger="kpi_degradation",
+                kpi_before=baseline_kpi,
+                kpi_after=candidate_kpi,
+            )
+            proposal.status = "rolled_back"
+            return {
+                "status": "rolled_back",
+                "new_version": new_version,
+                "current_version": self.current_personality_version,
+                "rollback_event": rollback_event.to_dict(),
+                "proposal": proposal.to_dict(),
+                "decision": decision.to_dict(),
+            }
+
+        return {
+            "status": "approved",
+            "new_version": new_version,
+            "current_version": self.current_personality_version,
+            "proposal": proposal.to_dict(),
+            "decision": decision.to_dict(),
+        }
 
     def save_new_personality_version(self, new_text: str, reason: str) -> int:
         existing_versions = list(self.versions_dir.glob("personality_v*.txt"))
