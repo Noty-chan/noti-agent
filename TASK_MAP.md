@@ -1,4 +1,3 @@
-
 # TASK_MAP.md — карта задач по `noty_specification.md`
 
 ## A. Архитектурный каркас (из раздела «Архитектура»)
@@ -6,8 +5,6 @@
 - [x] Разделить ядро на доменные модули (api/context/prompt/mood/tools/memory/thought).
 - [x] Добавить transport-слой для реального VK ingestion.
 - [x] Подготовить адаптер под Telegram (опциональный режим).
-
-
 
 ## B. Память и обучение (раздел «Память и обучение»)
 - [x] Завести SQLite manager и таблицы из спецификации.
@@ -63,18 +60,18 @@
 - [x] Динамическое влияние истории на стиль ответа.
 
 ### Фаза 5: Инструменты
-- [ ] Добавить в `noty/core/response_processor.py` обязательную проверку ролей перед каждым `tool_call` с блокировкой выполнения при недостаточных правах.  
-  **Критерий приемки:** `ResponseProcessor` возвращает статус `denied` и не вызывает executor для пользователя без роли модератора/админа.  
-  **Тестовый артефакт:** новый `tests/core/test_response_processor_tool_roles.py`.
-- [ ] Реализовать в `noty/tools/safe_tool_executor.py` двухшаговое подтверждение для опасных действий (`ban/mute/delete`) с idempotency-ключом.  
-  **Критерий приемки:** первый вызов опасного действия возвращает `confirmation_required`, повтор с тем же ключом исполняет действие ровно один раз.  
-  **Тестовый артефакт:** новый `tests/tools/test_safe_tool_executor_confirmations.py`.
-- [ ] Привязать модерационные `tool_call` к платформенным адаптерам в `noty/transport/*` (VK/TG) с унифицированным форматом результата.  
-  **Критерий приемки:** для `ban_user` и `delete_message` transport-слой возвращает нормализованный payload (`status`, `platform_action_id`, `chat_id`).  
-  **Тестовый артефакт:** новый `tests/transport/test_moderation_actions.py`.
-- [ ] Добавить в `noty/core/response_processor.py` пост-обработку результата tools (обновление mood/relationship только при `success`).  
-  **Критерий приемки:** при `success` обновления выполняются, при `denied/failed` изменения отношения и настроения не применяются.  
-  **Тестовый артефакт:** существующий `tests/core/test_response_processor.py` (расширить кейсами).
+- [ ] Проверка ролей в `noty/core/response_processor.py` перед каждым `tool_call`.
+  **Критерий приемки:** при недостаточной роли возвращается `denied`, executor не вызывается.
+  **Тестовый артефакт:** `tests/test_tool_execution_pipeline.py` (добавить кейс `denied_by_role`).
+- [ ] Двухшаговое подтверждение опасных команд в `noty/tools/safe_tool_executor.py` с idempotency-ключом.
+  **Критерий приемки:** первый вызов -> `confirmation_required`, повтор с тем же ключом -> ровно одно исполнение.
+  **Тестовый артефакт:** `tests/test_tool_confirmation_idempotency.py`.
+- [ ] Привязка moderation tool calls к VK/TG адаптерам в `noty/transport/*` с единым payload.
+  **Критерий приемки:** `ban_user/delete_message` возвращают `status`, `platform_action_id`, `chat_id`, `reason`.
+  **Тестовый артефакт:** `tests/test_chat_control_gateways.py`.
+- [ ] Пост-обработка tools в `noty/core/response_processor.py` только при `success`.
+  **Критерий приемки:** `mood` и `relationship` обновляются только для `success`; для `denied/failed` изменений нет.
+  **Тестовый артефакт:** `tests/test_tool_execution_pipeline.py`.
 
 ### Фаза 6: Монолог
 - [x] Учет мыслей в выборе стратегий и тональности.
@@ -83,64 +80,88 @@
 - [x] Approve/reject workflow и rollback personality.
 
 ### Фаза 8: Мультичатность
-- [ ] В `noty/memory/session_state.py` ввести namespace-ключи состояния вида `{platform}:{chat_id}:{user_id}` для полной изоляции сессий.  
-  **Критерий приемки:** записи/чтение состояния для одного чата не влияют на другой чат того же пользователя.  
-  **Тестовый артефакт:** новый `tests/memory/test_session_state_namespaces.py`.
-- [ ] В `noty/core/context_manager.py` разделить сбор recent/semantic/important контекста по `chat_id` и `thread_id`.  
-  **Критерий приемки:** контекст, собранный для одного чата, не содержит сообщений и памяти из другого чата.  
-  **Тестовый артефакт:** новый `tests/core/test_context_manager_multichat.py`.
-- [ ] Тест-долг: добавить `tests/test_context_manager_multichat.py` для изоляции recent/semantic/important контекста по `chat_id` и `thread_id`.
-- [ ] В `noty/transport/router.py` добавить маршрутизацию событий с обязательной передачей `platform`, `chat_id`, `user_id` в pipeline.  
-  **Критерий приемки:** каждое входящее событие получает стабильный routing-key, который используется всеми downstream-модулями.  
-  **Тестовый артефакт:** новый `tests/transport/test_router_multichat_routing.py`.
-- [ ] Добавить очистку и TTL в `noty/memory/session_state.py` на уровне namespace, чтобы истечение одной сессии не затрагивало соседние.  
-  **Критерий приемки:** истекший namespace удаляется выборочно, активные namespace остаются доступными.  
-  **Тестовый артефакт:** существующий `tests/memory/test_session_state.py` (добавить сценарии TTL-изоляции).
-- [ ] Тест-долг: добавить `tests/test_session_state_ttl_namespaces.py` для выборочного TTL-expire по namespace.
+- [ ] Namespace-ключи в `noty/memory/session_state.py`: `{platform}:{chat_id}:{user_id}`.
+  **Критерий приемки:** состояние одного чата не читается и не изменяется из другого чата того же пользователя.
+  **Тестовый артефакт:** `tests/test_multichat_isolation.py` (добавить кейс namespace state).
+- [ ] Изоляция динамического контекста в `noty/core/context_manager.py` по `chat_id` + `thread_id`.
+  **Критерий приемки:** блоки `recent/semantic/important` не содержат сообщений из соседних чатов.
+  **Тестовый артефакт:** `tests/test_multichat_isolation.py` (добавить кейс context split).
+- [ ] Маршрутизация в `noty/transport/router.py` с обязательным пробросом `platform/chat_id/user_id`.
+  **Критерий приемки:** routing-key стабилен и одинаково доступен всем downstream-модулям pipeline.
+  **Тестовый артефакт:** `tests/test_transport_event_contract.py`.
+- [ ] TTL-очистка в `noty/memory/session_state.py` на уровне namespace.
+  **Критерий приемки:** удаляется только истекший namespace, активные соседние namespace сохраняются.
+  **Тестовый артефакт:** `tests/test_session_state.py` + новый `tests/test_session_state_ttl_namespaces.py`.
 
 ### Фаза 9: Полировка
-- [ ] Реализовать в `noty/utils/metrics.py` отдельные метрики p50/p95 latency и token-cost по этапам pipeline (filter/context/prompt/llm/tools).  
-  **Критерий приемки:** метрики экспортируются с тегами этапа и платформы, доступны для сравнения до/после оптимизаций.  
-  **Тестовый артефакт:** новый `tests/utils/test_metrics_pipeline_stages.py`.
-- [ ] Тест-долг: добавить `tests/test_metrics_pipeline_stages.py` для проверки p50/p95 и token-cost по stage/platform тегам.
-- [ ] В `noty/filters/*` добавить кэширование embedding-результатов и батчирование запросов для однотипных сообщений.  
-  **Критерий приемки:** повторная фильтрация идентичного текста использует кэш и снижает количество внешних вызовов.  
-  **Тестовый артефакт:** новый `tests/filters/test_embedding_cache.py`.
-- [ ] Тест-долг: добавить `tests/test_embedding_cache_batching.py` для cache-hit и batching-сценариев.
-- [ ] В `noty/core/api_rotator.py` внедрить адаптивный выбор провайдера по стоимости/задержке с fallback при деградации.  
-  **Критерий приемки:** при превышении latency/error-threshold текущий провайдер автоматически заменяется на следующий доступный.  
-  **Тестовый артефакт:** существующий `tests/core/test_api_rotator.py` (расширить сценариями деградации).
-- [ ] Тест-долг: добавить `tests/test_api_rotator_adaptive_fallback.py` для переключения провайдера при деградации latency/error.
-- [ ] Добавить в `noty/utils/metrics.py` и `noty/filters/*` алерт на отклонение respond-rate от целевого коридора (20% ± допуск).  
-  **Критерий приемки:** при выходе за порог формируется событие алерта с причиной (перефильтрация/недофильтрация).  
-  **Тестовый артефакт:** новый `tests/filters/test_respond_rate_alerts.py`.
-- [ ] Тест-долг: добавить `tests/test_respond_rate_alerts.py` для причинных алертов per-filter-state.
+- [ ] Ввести performance-бюджет в `noty/utils/metrics.py`:
+  - p50 e2e latency ≤ 1200 ms,
+  - p95 e2e latency ≤ 2500 ms,
+  - token-cost ≤ 0.020 USD / сообщение,
+  - error-rate tool-calls ≤ 2.0%.
+  **Критерий приемки:** метрики публикуются по этапам `filter/context/prompt/llm/tools` с тегами платформы.
+  **Тестовый артефакт:** новый `tests/test_metrics_pipeline_stages.py`.
+- [ ] Кэширование embedding и batching в `noty/filters/embedding_filter.py`.
+  **Критерий приемки:** повторная фильтрация идентичного текста даёт cache-hit; внешних вызовов меньше на батчах.
+  **Тестовый артефакт:** `tests/test_embedding_cache_batching.py`.
+- [ ] Адаптивный fallback провайдера в `noty/core/api_rotator.py` по latency/error.
+  **Критерий приемки:** при деградации активного провайдера происходит автоматическое переключение на следующий доступный.
+  **Тестовый артефакт:** `tests/test_api_rotator_adaptive_fallback.py`.
+- [ ] Алертинг по отклонению respond-rate от целевого коридора 20% ± 5 п.п.
+  **Критерий приемки:** при отклонении создается алерт с причиной `перефильтрация` / `недофильтрация`.
+  **Тестовый артефакт:** `tests/test_respond_rate_alerts.py`.
 
 ### Фаза 10: Telegram
 - [x] Завершить адаптер и общий routing слой.
 
+## Контракт мультичат-изоляции (`chat_id` scope)
+- [ ] `session_state`: все чтения/записи строго по ключу `{platform}:{chat_id}:{user_id}`; без fallback на “последний активный чат”.
+- [ ] `context_manager`: `recent/semantic/important` собираются только из того же `platform+chat_id+thread_id`.
+- [ ] `router`: каждое событие обязано содержать `platform`, `chat_id`, `user_id`; отсутствие любого поля = hard reject.
+- [ ] `response_processor/tools`: tool execution и memory updates используют текущий `chat_id` из routing context, без глобальных синглтонов.
+- [ ] Чекбокс готовности фазы 8: «контракт принят + `tests/test_multichat_isolation.py` и `tests/test_transport_event_contract.py` зелёные».
+
+## Sprint-1 (2 недели)
+
+| ID | Приоритет | Задача | Модуль(и) | Роль | Сложность | DoD |
+|---|---|---|---|---|---|---|
+| S1 | P1 | Ролевой gate для `tool_call` | `noty/core/response_processor.py` | Backend | M | `denied` при нехватке роли + зелёный `tests/test_tool_execution_pipeline.py` |
+| S2 | P1 | Двухшаговое подтверждение `ban/mute/delete` | `noty/tools/safe_tool_executor.py` | Backend | M | `confirmation_required` -> один execute по idempotency key + зелёный `tests/test_tool_confirmation_idempotency.py` |
+| S3 | P1 | Namespace-изоляция session state + TTL | `noty/memory/session_state.py` | Backend | M | нет утечек между чатами + выборочный expire namespace + зелёные `tests/test_multichat_isolation.py`, `tests/test_session_state.py` |
+| S4 | P1 | Изоляция контекста по `chat_id/thread_id` | `noty/core/context_manager.py` | Backend | M | `recent/semantic/important` не смешиваются между чатами + зелёный `tests/test_multichat_isolation.py` |
+| S5 | P2 | Метрики p50/p95 + token-cost по stage/platform | `noty/utils/metrics.py` | Backend/DevOps | M | есть dashboard-friendly series и smoke `tests/test_metrics_pipeline_stages.py` |
+| S6 | P2 | Embedding cache + batching | `noty/filters/embedding_filter.py` | Backend | M | cache-hit ≥ 80% на повторе и снижение внешних вызовов ≥ 30% на батче + `tests/test_embedding_cache_batching.py` |
+| S7 | P2 | Adaptive provider fallback | `noty/core/api_rotator.py` | Backend | S | автопереключение при SLA breach и восстановление baseline + `tests/test_api_rotator_adaptive_fallback.py` |
+
+**Зависимости Sprint-1:** `S1 -> S2`; `S3 -> S4`; `S5` желательно до `S6/S7` для верификации эффекта «до/после».
 
 ## Матрица: задача -> тест
 
 | Фаза / подзадача | Целевой тестовый файл (`tests/`) | Сценарий проверки | Статус |
 |---|---|---|---|
-| 5. Проверка ролей перед `tool_call` | `tests/test_tool_execution_pipeline.py` | Немодератор инициирует `tool_call`: `ResponseProcessor` должен вернуть `denied` и не вызвать executor. | нужно обновить |
-| 5. Двухшаговое подтверждение + idempotency | `tests/test_tool_confirmation_idempotency.py` | 1-й вызов опасного tool -> `confirmation_required`; 2-й с тем же ключом -> ровно одно исполнение. | нужно обновить |
-| 5. Привязка moderation tool calls к VK/TG адаптерам | `tests/test_chat_control_gateways.py` | `ban_user` / `delete_message` возвращают нормализованный payload: `status`, `platform_action_id`, `chat_id`. | нужно обновить |
-| 5. Пост-обработка tools только при `success` | `tests/test_tool_execution_pipeline.py` | `mood`/`relationship` меняются только при `success`, при `denied/failed` — без изменений. | нужно обновить |
-| 8. Namespace-изоляция session state | `tests/test_multichat_isolation.py` | Ключи `{platform}:{chat_id}:{user_id}` не допускают утечек состояния между чатами одного пользователя. | нужно обновить |
-| 8. Context Builder по `chat_id`/`thread_id` | `tests/test_multichat_isolation.py` | `recent/semantic/important` контекст одного чата/треда не содержит данные другого. | нужно обновить |
-| 8. Router routing-key и обязательные поля | `tests/test_transport_event_contract.py` | Каждое событие несет `platform`, `chat_id`, `user_id`; routing-key стабилен и пробрасывается вниз по pipeline. | нужно обновить |
-| 8. TTL очистка по namespace | `tests/test_multichat_isolation.py` | Истечение TTL удаляет только целевой namespace, соседние активные сессии сохраняются. | нужно обновить |
-| 9. Метрики p50/p95 и token-cost по stage/platform | `tests/test_metrics_pipeline_stages.py` | Экспортируются latency/token-cost метрики по этапам `filter/context/prompt/llm/tools` с тегом платформы. | нужно добавить |
-| 9. Embedding cache + batching | `tests/test_embedding_cache_batching.py` | Повторный одинаковый текст даёт cache-hit; однотипные сообщения обрабатываются батчем с меньшим числом внешних вызовов. | нужно добавить |
-| 9. Adaptive provider fallback | `tests/test_api_rotator_adaptive_fallback.py` | При деградации latency/error выполняется автоматическое переключение на следующий доступный провайдер. | нужно добавить |
-| 9. Respond-rate alerts | `tests/test_respond_rate_alerts.py` | При выходе за коридор 20% ± допуск создаётся алерт с причиной `перефильтрация/недофильтрация`. | нужно добавить |
+| 5. Ролевой gate перед `tool_call` | `tests/test_tool_execution_pipeline.py` | Немодератор инициирует tool-call -> `denied`, executor не вызывается. | нужно обновить |
+| 5. Двухшаговое подтверждение + idempotency | `tests/test_tool_confirmation_idempotency.py` | Первый вызов -> `confirmation_required`; второй с тем же ключом -> одно выполнение. | есть |
+| 5. Привязка moderation tool calls к VK/TG | `tests/test_chat_control_gateways.py` | `ban_user/delete_message` возвращают унифицированный payload. | нужно обновить |
+| 5. Пост-обработка tools только при `success` | `tests/test_tool_execution_pipeline.py` | `mood/relationship` меняются только при `success`. | нужно обновить |
+| 8. Namespace-изоляция state | `tests/test_multichat_isolation.py` | Нет утечек state между чатами одного пользователя. | нужно обновить |
+| 8. Изоляция динамического контекста | `tests/test_multichat_isolation.py` | `recent/semantic/important` не содержат чужие сообщения. | нужно обновить |
+| 8. Contract routing-key и поля события | `tests/test_transport_event_contract.py` | `platform/chat_id/user_id` обязательны, routing-key стабилен. | нужно обновить |
+| 8. TTL на уровне namespace | `tests/test_session_state.py`, `tests/test_session_state_ttl_namespaces.py` | Истекает только целевой namespace. | нужно добавить |
+| 9. Метрики p50/p95 + token-cost по stage | `tests/test_metrics_pipeline_stages.py` | Метрики экспортируются по этапам и платформам. | нужно добавить |
+| 9. Embedding cache + batching | `tests/test_embedding_cache_batching.py` | cache-hit на повторе, меньше внешних вызовов в батче. | нужно добавить |
+| 9. Adaptive provider fallback | `tests/test_api_rotator_adaptive_fallback.py` | Автопереключение при деградации latency/error. | нужно добавить |
+| 9. Respond-rate alerts | `tests/test_respond_rate_alerts.py` | Алерт за пределами 20% ± 5 п.п. с причиной. | нужно добавить |
 
 ---
 
-## Приоритет следующего итерационного цикла
-1. Реальный VK ingestion + сквозной MVP.
-2. Метрики фильтрации и стоимости.
-3. Автообновление памяти/отношений после ответа.
-4. Тестовый контур.
+## Приоритет следующего итерационного цикла (Top-5)
+1. **Ролевой gate + двухшаговое подтверждение инструментов (Фаза 5).**
+   **Готово, если:** критичные tool-calls блокируются без роли, а опасные действия исполняются только после подтверждения и строго один раз по idempotency-ключу.
+2. **Полная namespace-изоляция state и TTL (Фаза 8).**
+   **Готово, если:** нет cross-chat leakage при записи/чтении/expire состояния.
+3. **Изоляция контекста и routing contract (Фаза 8).**
+   **Готово, если:** `recent/semantic/important` и routing-key строго scoped по `platform+chat_id+thread_id`.
+4. **Включение performance-бюджета и stage-метрик (Фаза 9).**
+   **Готово, если:** доступны p50/p95 latency, token-cost и tool error-rate по pipeline stage/platform.
+5. **Оптимизации стоимости/задержек: embedding cache + adaptive fallback + respond-rate alerts (Фаза 9).**
+   **Готово, если:** соблюдаются KPI: p95 ≤ 2500 ms, token-cost ≤ 0.020 USD/сообщение, respond-rate в коридоре 20% ± 5 п.п.
