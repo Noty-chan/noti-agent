@@ -74,7 +74,8 @@ class SafeToolExecutor:
             return {"status": "validation_error", "message": "Аргументы инструмента должны быть объектом."}
 
         if tool_info["requires_owner"] and user_id != self.owner_id:
-            if self._is_personality_action(function_name):
+            is_personality_action = self._is_personality_action(function_name)
+            if is_personality_action:
                 self._audit_dangerous_action(
                     function_name=function_name,
                     user_id=user_id,
@@ -84,7 +85,10 @@ class SafeToolExecutor:
                     risk_level=tool_info.get("risk_level", "high"),
                     error="owner_only",
                 )
-            return {"status": "forbidden", "message": "Недостаточно прав."}
+            return {
+                "status": "error" if is_personality_action else "forbidden",
+                "message": "Недостаточно прав.",
+            }
 
         if tool_info["requires_private"] and not is_private:
             return {"status": "forbidden", "message": "Инструмент доступен только в ЛС."}
