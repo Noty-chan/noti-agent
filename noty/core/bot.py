@@ -6,7 +6,11 @@ from datetime import datetime
 from uuid import uuid4
 from typing import Any, Dict
 
+
+from noty.core.events import IncomingEvent, InteractionJSONLLogger
+
 from noty.core.adaptation_engine import AdaptationEngine
+
 from noty.core.api_rotator import APIRotator
 from noty.core.message_handler import MessageHandler
 from noty.memory.mem0_wrapper import Mem0Wrapper
@@ -33,8 +37,13 @@ class NotyBot:
         relationship_manager: RelationshipManager | None = None,
         session_store: SessionStateStore | None = None,
         metrics: MetricsCollector | None = None,
+
+        interaction_logger: InteractionJSONLLogger | None = None,
+
         adaptation_engine: AdaptationEngine | None = None,
+
         response_processor: ResponseProcessor | None = None,
+
     ):
         self.api_rotator = api_rotator
         self.message_handler = message_handler
@@ -46,6 +55,14 @@ class NotyBot:
         self.relationship_manager = relationship_manager
         self.session_store = session_store or SessionStateStore()
         self.metrics = metrics or MetricsCollector()
+
+        self.interaction_logger = interaction_logger or InteractionJSONLLogger()
+
+    def handle_message(self, event: IncomingEvent) -> Dict[str, Any]:
+        chat_id = event.chat_id
+        user_id = event.user_id
+        text = event.text
+
         self.adaptation_engine = adaptation_engine or AdaptationEngine()
         self.response_processor = response_processor or ResponseProcessor()
 
@@ -55,7 +72,10 @@ class NotyBot:
         text = event["text"]
         interaction_id = event.get("interaction_id", f"{chat_id}:{uuid4().hex[:12]}")
 
-        relationship = event.get("relationship")
+
+        self.interaction_logger.log_incoming(event)
+
+        relationship = event.relationship
         if not relationship and self.relationship_manager:
             relationship = self.relationship_manager.get_relationship(user_id)
 
@@ -73,12 +93,14 @@ class NotyBot:
             decision = self.message_handler.decide_reaction(text)
             if not decision.should_respond:
                 self._log_interaction(event, responded=False, response_text="", tools_used=[])
-                return {
+                result = {
                     "status": "ignored",
                     "reason": decision.reason,
                     "score": round(decision.score, 4),
                     "threshold": round(decision.threshold, 4),
                 }
+                self.interaction_logger.log_outgoing(event, result)
+                return result
 
             mood_state = self.mood_manager.get_current_state()
             relationship_trend = self.relationship_manager.get_relationship_trend(user_id) if self.relationship_manager else {}
@@ -108,12 +130,15 @@ class NotyBot:
             thought_entry = self.monologue.generate_thoughts(
                 {
                     "chat_id": chat_id,
-                    "chat_name": event.get("chat_name", "Unknown"),
+                    "chat_name": event.chat_name or "Unknown",
                     "user_id": user_id,
-                    "username": event.get("username", "unknown"),
+                    "username": event.username or "unknown",
                     "message": text,
                     "interaction_id": interaction_id,
                     "relationship_score": event.get("relationship", {}).get("score", 0),
+
+                    "relationship_score": (event.relationship or {}).get("score", 0),
+
                     "mood": mood_state["mood"],
                     "energy": mood_state["energy"],
                 },
@@ -171,6 +196,9 @@ class NotyBot:
                 thought_quality=thought_entry.get("quality_score", 0.0),
             )
 
+
+            result = {
+
             recommendation = self._adapt_behavior_after_response(
                 event=event,
                 outcome=outcome,
@@ -178,6 +206,7 @@ class NotyBot:
             )
 
             return {
+
                 "status": "responded",
                 "text": response_text,
                 "usage": llm_response.get("usage", {}),
@@ -188,6 +217,8 @@ class NotyBot:
                 "filter_stats": self.message_handler.get_filter_stats(),
                 "adaptation": recommendation,
             }
+            self.interaction_logger.log_outgoing(event, result)
+            return result
 
 
     @staticmethod
@@ -202,7 +233,7 @@ class NotyBot:
 
     def _log_interaction(
         self,
-        event: Dict[str, Any],
+        event: IncomingEvent,
         responded: bool,
         response_text: str,
         mood_before: str = "neutral",
@@ -220,9 +251,9 @@ class NotyBot:
             """,
             (
                 datetime.now().isoformat(),
-                event["chat_id"],
-                event["user_id"],
-                event["text"],
+                event.chat_id,
+                event.user_id,
+                event.text,
                 int(responded),
                 response_text,
                 mood_before,
@@ -235,30 +266,30 @@ class NotyBot:
 
     def _update_memory_after_response(
         self,
-        event: Dict[str, Any],
+        event: IncomingEvent,
         response_text: str,
         outcome: str,
         tone_used: str = "balanced",
         thought_quality: float = 0.0,
     ) -> None:
         if self.relationship_manager:
-            username = event.get("username", f"user_{event['user_id']}")
+            username = event.username or f"user_{event.user_id}"
             interaction_outcome = "positive" if outcome == "success" else "negative"
             self.relationship_manager.update_relationship(
-                user_id=event["user_id"],
+                user_id=event.user_id,
                 username=username,
                 interaction_outcome=interaction_outcome,
-                notes=f"Взаимодействие в чате {event['chat_id']} с outcome={outcome}; thought_quality={thought_quality}",
+                notes=f"Взаимодействие в чате {event.chat_id} с outcome={outcome}; thought_quality={thought_quality}",
                 tone_used=tone_used,
             )
 
         if self.mem0:
             self.mem0.remember_interaction(
-                user_id=f"user_{event['user_id']}",
-                message=event["text"],
+                user_id=f"user_{event.user_id}",
+                message=event.text,
                 response=response_text,
                 outcome=outcome,
-                metadata={"chat_id": event["chat_id"]},
+                metadata={"chat_id": event.chat_id},
             )
 
     def _adapt_behavior_after_response(
