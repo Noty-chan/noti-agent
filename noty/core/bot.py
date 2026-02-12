@@ -175,6 +175,7 @@ class NotyBot:
                 user_id=user_id,
                 chat_id=chat_id,
                 is_private=bool(event_data.get("is_private", False)),
+                user_role=str(event_data.get("user_role", payload.get("user_role", "user"))),
             )
             self._apply_tool_post_processing(processing_result.tool_results)
 
@@ -190,13 +191,15 @@ class NotyBot:
             )
 
             outcome = payload.get("interaction_outcome", processing_result.outcome)
-            self._update_memory_after_response(
-                event_data,
-                response_text=response_text,
-                outcome=outcome,
-                tone_used=strategy_name,
-                thought_quality=thought_entry.get("quality_score", 0.0),
-            )
+            should_update_memory = processing_result.status == "success"
+            if should_update_memory:
+                self._update_memory_after_response(
+                    event_data,
+                    response_text=response_text,
+                    outcome=outcome,
+                    tone_used=strategy_name,
+                    thought_quality=thought_entry.get("quality_score", 0.0),
+                )
 
             recommendation = self._adapt_behavior_after_response(
                 event=event_data,
@@ -234,10 +237,6 @@ class NotyBot:
             status = result.get("status")
             if status == "success":
                 self.mood_manager.update_on_event("interesting_topic", {"energy_cost": 1})
-            elif status == "awaiting_confirmation":
-                self.mood_manager.update_on_event("interesting_topic", {"energy_cost": 0})
-            elif status in {"forbidden", "validation_error", "runtime_error"}:
-                self.mood_manager.update_on_event("insulted", {"energy_cost": 1})
 
     def _log_interaction(
         self,

@@ -30,3 +30,17 @@ class ModerationGateway(ABC):
     @abstractmethod
     def bulk_delete_messages(self, chat_id: int, message_ids: list[int]) -> dict[str, Any]:
         """Массово удалить сообщения."""
+
+
+
+def build_moderation_result(*, platform: str, chat_id: int, action: str, platform_action_id: str, reason: str | None = None, **extra: Any) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "platform": platform,
+        "chat_id": chat_id,
+        "action": action,
+        "status": "success",
+        "platform_action_id": platform_action_id,
+        "reason": reason,
+    }
+    payload.update(extra)
+    return payload

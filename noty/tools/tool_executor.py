@@ -33,6 +33,7 @@ class SafeToolExecutor:
         requires_owner: bool = False,
         requires_private: bool = False,
         requires_confirmation: bool = False,
+        allowed_roles: list[str] | None = None,
         description: str = "",
         risk_level: str = "low",
     ):
@@ -41,6 +42,7 @@ class SafeToolExecutor:
             "requires_owner": requires_owner,
             "requires_private": requires_private,
             "requires_confirmation": requires_confirmation,
+            "allowed_roles": [role.lower() for role in (allowed_roles or [])],
             "description": description,
             "risk_level": risk_level,
         }

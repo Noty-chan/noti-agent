@@ -65,6 +65,10 @@ def test_vk_gateway_and_action_log_contract(tmp_path: Path):
     result = service.mute_user(chat_id=10, user_id=20, minutes=15, reason="spam")
 
     assert result["platform"] == "vk"
+    assert result["status"] == "success"
+    assert result["platform_action_id"] == "vk_mute_1"
+    assert result["chat_id"] == 10
+    assert result["reason"] == "spam"
     assert vk_sdk.calls == [
         (
             "mute_user",
@@ -88,6 +92,10 @@ def test_tg_gateway_contract():
     result = gateway.warn_user(chat_id=77, user_id=88, reason="caps")
 
     assert result["platform"] == "tg"
+    assert result["status"] == "success"
+    assert result["platform_action_id"] == "991"
+    assert result["chat_id"] == 77
+    assert result["reason"] == "caps"
     assert result["warning_note_id"] == 991
     assert tg_sdk.calls == [
         (
@@ -121,3 +129,15 @@ def test_chat_control_tools_registration_security_flags(tmp_path: Path):
         is_private=True,
     )
     assert resp["status"] == "awaiting_confirmation"
+
+
+def test_gateways_return_unified_payload_for_ban_and_delete():
+    vk_result = VKModerationGateway(VKSDKMock()).ban_user(chat_id=10, user_id=55, reason="raid")
+    tg_result = TGModerationGateway(TGSDKMock()).delete_message(chat_id=99, message_id=777)
+
+    for result in (vk_result, tg_result):
+        assert result["status"] == "success"
+        assert "platform_action_id" in result
+        assert "chat_id" in result
+        assert "reason" in result
+
