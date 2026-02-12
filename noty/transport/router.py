@@ -11,7 +11,7 @@ import yaml
 from noty.transport.telegram.client import TelegramClient
 from noty.transport.telegram.mapper import map_telegram_update
 from noty.transport.telegram.polling import TelegramPolling, TelegramWebhookReceiver
-from noty.transport.types import IncomingEvent
+from noty.transport.types import IncomingEvent, normalize_incoming_event
 from noty.transport.vk.mapper import map_vk_event
 
 
@@ -28,12 +28,16 @@ class PlatformAdapter:
 
     def iter_events(self) -> Iterable[IncomingEvent]:
         for raw in self.source.poll():
-            yield self.mapper(raw)
+            yield normalize_incoming_event(self.mapper(raw))
 
 
 class TransportRouter:
     def __init__(self, adapters: list[PlatformAdapter]):
         self.adapters = adapters
+
+    @staticmethod
+    def make_routing_key(event: IncomingEvent) -> str:
+        return f"{event.platform}:{event.chat_id}:{event.user_id}"
 
     def iter_events(self) -> Iterable[IncomingEvent]:
         for adapter in self.adapters:

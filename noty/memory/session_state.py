@@ -60,6 +60,14 @@ class SessionStateStore:
                 removed += 1
         return removed
 
+    def cleanup_expired_namespace(self, namespace: str) -> int:
+        now = self._now()
+        ns_store = self._ns(namespace)
+        expired = [key for key, data in ns_store.items() if data["expires_at"] <= now]
+        for key in expired:
+            ns_store.pop(key, None)
+        return len(expired)
+
     def size(self) -> int:
         self.cleanup_expired()
         return sum(len(namespace_store) for namespace_store in self._store.values())

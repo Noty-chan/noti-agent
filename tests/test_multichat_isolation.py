@@ -5,6 +5,7 @@ from pathlib import Path
 from noty.core.context_manager import DynamicContextBuilder
 from noty.memory.mem0_wrapper import Mem0Wrapper
 from noty.memory.sqlite_db import SQLiteDBManager
+from noty.memory.session_state import SessionStateStore
 
 
 class _DummyEncoder:
@@ -66,3 +67,15 @@ def test_mem0_recall_isolates_scope_metadata():
 
     assert len(recalls) == 1
     assert recalls[0]["text"] == "vk data"
+
+
+def test_session_state_isolated_by_namespace_key():
+    store = SessionStateStore(ttl_seconds=60)
+    ns_chat1 = "vk:100:1"
+    ns_chat2 = "vk:200:1"
+
+    store.set("chat", ns_chat1, {"value": "chat1"})
+    store.set("chat", ns_chat2, {"value": "chat2"})
+
+    assert store.get("chat", ns_chat1) == {"value": "chat1"}
+    assert store.get("chat", ns_chat2) == {"value": "chat2"}
