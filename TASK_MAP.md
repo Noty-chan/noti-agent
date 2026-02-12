@@ -80,16 +80,16 @@
 - [x] Approve/reject workflow и rollback personality.
 
 ### Фаза 8: Мультичатность
-- [ ] Namespace-ключи в `noty/memory/session_state.py`: `{platform}:{chat_id}:{user_id}`.
+- [x] Namespace-ключи в `noty/memory/session_state.py`: `{platform}:{chat_id}:{user_id}`.
   **Критерий приемки:** состояние одного чата не читается и не изменяется из другого чата того же пользователя.
   **Тестовый артефакт:** `tests/test_multichat_isolation.py` (добавить кейс namespace state).
 - [ ] Изоляция динамического контекста в `noty/core/context_manager.py` по `chat_id` + `thread_id`.
   **Критерий приемки:** блоки `recent/semantic/important` не содержат сообщений из соседних чатов.
   **Тестовый артефакт:** `tests/test_multichat_isolation.py` (добавить кейс context split).
-- [ ] Маршрутизация в `noty/transport/router.py` с обязательным пробросом `platform/chat_id/user_id`.
+- [x] Маршрутизация в `noty/transport/router.py` с обязательным пробросом `platform/chat_id/user_id`.
   **Критерий приемки:** routing-key стабилен и одинаково доступен всем downstream-модулям pipeline.
   **Тестовый артефакт:** `tests/test_transport_event_contract.py`.
-- [ ] TTL-очистка в `noty/memory/session_state.py` на уровне namespace.
+- [x] TTL-очистка в `noty/memory/session_state.py` на уровне namespace.
   **Критерий приемки:** удаляется только истекший namespace, активные соседние namespace сохраняются.
   **Тестовый артефакт:** `tests/test_session_state.py` + новый `tests/test_session_state_ttl_namespaces.py`.
 
@@ -101,13 +101,13 @@
   - error-rate tool-calls ≤ 2.0%.
   **Критерий приемки:** метрики публикуются по этапам `filter/context/prompt/llm/tools` с тегами платформы.
   **Тестовый артефакт:** новый `tests/test_metrics_pipeline_stages.py`.
-- [ ] Кэширование embedding и batching в `noty/filters/embedding_filter.py`.
+- [x] Кэширование embedding и batching в `noty/filters/embedding_filter.py`.
   **Критерий приемки:** повторная фильтрация идентичного текста даёт cache-hit; внешних вызовов меньше на батчах.
   **Тестовый артефакт:** `tests/test_embedding_cache_batching.py`.
-- [ ] Адаптивный fallback провайдера в `noty/core/api_rotator.py` по latency/error.
+- [x] Адаптивный fallback провайдера в `noty/core/api_rotator.py` по latency/error.
   **Критерий приемки:** при деградации активного провайдера происходит автоматическое переключение на следующий доступный.
   **Тестовый артефакт:** `tests/test_api_rotator_adaptive_fallback.py`.
-- [ ] Алертинг по отклонению respond-rate от целевого коридора 20% ± 5 п.п.
+- [x] Алертинг по отклонению respond-rate от целевого коридора 20% ± 5 п.п.
   **Критерий приемки:** при отклонении создается алерт с причиной `перефильтрация` / `недофильтрация`.
   **Тестовый артефакт:** `tests/test_respond_rate_alerts.py`.
 
@@ -115,9 +115,9 @@
 - [x] Завершить адаптер и общий routing слой.
 
 ## Контракт мультичат-изоляции (`chat_id` scope)
-- [ ] `session_state`: все чтения/записи строго по ключу `{platform}:{chat_id}:{user_id}`; без fallback на “последний активный чат”.
+- [x] `session_state`: все чтения/записи строго по ключу `{platform}:{chat_id}:{user_id}`; без fallback на “последний активный чат”.
 - [ ] `context_manager`: `recent/semantic/important` собираются только из того же `platform+chat_id+thread_id`.
-- [ ] `router`: каждое событие обязано содержать `platform`, `chat_id`, `user_id`; отсутствие любого поля = hard reject.
+- [x] `router`: каждое событие обязано содержать `platform`, `chat_id`, `user_id`; отсутствие любого поля = hard reject.
 - [ ] `response_processor/tools`: tool execution и memory updates используют текущий `chat_id` из routing context, без глобальных синглтонов.
 - [ ] Чекбокс готовности фазы 8: «контракт принят + `tests/test_multichat_isolation.py` и `tests/test_transport_event_contract.py` зелёные».
 
@@ -143,14 +143,14 @@
 | 5. Двухшаговое подтверждение + idempotency | `tests/test_tool_confirmation_idempotency.py` | Первый вызов -> `confirmation_required`; второй с тем же ключом -> одно выполнение. | есть |
 | 5. Привязка moderation tool calls к VK/TG | `tests/test_chat_control_gateways.py` | `ban_user/delete_message` возвращают унифицированный payload. | сделано |
 | 5. Пост-обработка tools только при `success` | `tests/test_tool_execution_pipeline.py` | `mood/relationship` меняются только при `success`. | сделано |
-| 8. Namespace-изоляция state | `tests/test_multichat_isolation.py` | Нет утечек state между чатами одного пользователя. | нужно обновить |
+| 8. Namespace-изоляция state | `tests/test_multichat_isolation.py` | Нет утечек state между чатами одного пользователя. | сделано |
 | 8. Изоляция динамического контекста | `tests/test_multichat_isolation.py` | `recent/semantic/important` не содержат чужие сообщения. | нужно обновить |
-| 8. Contract routing-key и поля события | `tests/test_transport_event_contract.py` | `platform/chat_id/user_id` обязательны, routing-key стабилен. | нужно обновить |
-| 8. TTL на уровне namespace | `tests/test_session_state.py`, `tests/test_session_state_ttl_namespaces.py` | Истекает только целевой namespace. | нужно добавить |
+| 8. Contract routing-key и поля события | `tests/test_transport_event_contract.py` | `platform/chat_id/user_id` обязательны, routing-key стабилен. | сделано |
+| 8. TTL на уровне namespace | `tests/test_session_state.py`, `tests/test_session_state_ttl_namespaces.py` | Истекает только целевой namespace. | сделано |
 | 9. Метрики p50/p95 + token-cost по stage | `tests/test_metrics_pipeline_stages.py` | Метрики экспортируются по этапам и платформам. | сделано |
-| 9. Embedding cache + batching | `tests/test_embedding_cache_batching.py` | cache-hit на повторе, меньше внешних вызовов в батче. | нужно добавить |
-| 9. Adaptive provider fallback | `tests/test_api_rotator_adaptive_fallback.py` | Автопереключение при деградации latency/error. | нужно добавить |
-| 9. Respond-rate alerts | `tests/test_respond_rate_alerts.py` | Алерт за пределами 20% ± 5 п.п. с причиной. | нужно добавить |
+| 9. Embedding cache + batching | `tests/test_embedding_cache_batching.py` | cache-hit на повторе, меньше внешних вызовов в батче. | сделано |
+| 9. Adaptive provider fallback | `tests/test_api_rotator_adaptive_fallback.py` | Автопереключение при деградации latency/error. | сделано |
+| 9. Respond-rate alerts | `tests/test_respond_rate_alerts.py` | Алерт за пределами 20% ± 5 п.п. с причиной. | сделано |
 
 ---
 

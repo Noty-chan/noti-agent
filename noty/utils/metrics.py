@@ -103,6 +103,25 @@ class MetricsCollector:
             result[stage] = stage_item
         return result
 
+
+    def respond_rate_alert(self, responded: int, total: int, target_rate: float = 0.2, tolerance: float = 0.05) -> Dict[str, Any] | None:
+        if total <= 0:
+            return None
+        rate = responded / total
+        lower = target_rate - tolerance
+        upper = target_rate + tolerance
+        if lower <= rate <= upper:
+            return None
+        reason = "перефильтрация" if rate < lower else "недофильтрация"
+        return {
+            "status": "alert",
+            "reason": reason,
+            "respond_rate": round(rate, 4),
+            "target": target_rate,
+            "tolerance": tolerance,
+            "bounds": {"lower": round(lower, 4), "upper": round(upper, 4)},
+        }
+
     def snapshot(self) -> Dict[str, Any]:
         avg_timings = {}
         for metric, values in self.timings.items():
