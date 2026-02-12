@@ -20,10 +20,17 @@ class DynamicContextBuilder:
     def _estimate_tokens(text: str) -> int:
         return len(text) // 4
 
-    def build_context(self, chat_id: int, current_message: str, user_id: int) -> Dict[str, Any]:
+    def build_context(
+        self,
+        chat_id: int,
+        current_message: str,
+        user_id: int,
+        strategy_hints: Dict[str, Any] | None = None,
+    ) -> Dict[str, Any]:
         context_messages: List[Dict[str, Any]] = []
         used_tokens = 0
         sources = {"recent": 0, "semantic": 0, "important": 0}
+        hints = strategy_hints or {}
 
         recent_messages = self.db.get_recent_messages(chat_id, limit=5)
         for msg in recent_messages:
@@ -88,26 +95,44 @@ class DynamicContextBuilder:
                 used_tokens += msg_tokens
                 sources["important"] += 1
 
+
+        conflict_topics = [t.lower() for t in hints.get("avoid_topics", [])]
+        if conflict_topics:
+            context_messages = [
+                msg
+                for msg in context_messages
+                if not any(topic in msg["content"].lower() for topic in conflict_topics)
+            ]
+
         context_messages.sort(key=lambda x: x["timestamp"])
-        summary = self._create_summary(context_messages, sources)
+        summary = self._create_summary(context_messages, sources, hints)
         return {
             "messages": [{"role": m["role"], "content": m["content"]} for m in context_messages],
             "summary": summary,
             "total_tokens": used_tokens,
             "sources": sources,
-            "metadata": {"chat_id": chat_id, "user_id": user_id, "context_size": len(context_messages)},
+            "metadata": {
+                "chat_id": chat_id,
+                "user_id": user_id,
+                "context_size": len(context_messages),
+                "strategy_hints": hints,
+            },
         }
 
     @staticmethod
-    def _create_summary(messages: List[Dict[str, Any]], sources: Dict[str, int]) -> str:
+    def _create_summary(messages: List[Dict[str, Any]], sources: Dict[str, int], hints: Dict[str, Any]) -> str:
         if not messages:
             return "Новый диалог без предыстории."
         time_range = (
             datetime.fromisoformat(messages[0]["timestamp"]),
             datetime.fromisoformat(messages[-1]["timestamp"]),
         )
+        hints_line = ""
+        if hints.get("avoid_topics"):
+            hints_line = f"\n- Strategy hints: избегать тем {', '.join(hints['avoid_topics'])}"
         return (
             "Контекст диалога:\n"
             f"- Сообщений: {len(messages)} ({sources['recent']} недавних, {sources['semantic']} релевантных, {sources['important']} важных)\n"
             f"- Период: {time_range[0].strftime('%d.%m %H:%M')} - {time_range[1].strftime('%d.%m %H:%M')}"
+            f"{hints_line}"
         )

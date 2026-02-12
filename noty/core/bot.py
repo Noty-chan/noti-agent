@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from uuid import uuid4
 from typing import Any, Dict
 
 from noty.core.adaptation_engine import AdaptationEngine
@@ -15,6 +16,7 @@ from noty.memory.sqlite_db import SQLiteDBManager
 from noty.mood.mood_manager import MoodManager
 from noty.thought.monologue import InternalMonologue
 from noty.tools.tool_executor import SafeToolExecutor
+from noty.core.response_processor import ResponseProcessor
 from noty.utils.metrics import MetricsCollector
 
 
@@ -32,6 +34,7 @@ class NotyBot:
         session_store: SessionStateStore | None = None,
         metrics: MetricsCollector | None = None,
         adaptation_engine: AdaptationEngine | None = None,
+        response_processor: ResponseProcessor | None = None,
     ):
         self.api_rotator = api_rotator
         self.message_handler = message_handler
@@ -44,11 +47,13 @@ class NotyBot:
         self.session_store = session_store or SessionStateStore()
         self.metrics = metrics or MetricsCollector()
         self.adaptation_engine = adaptation_engine or AdaptationEngine()
+        self.response_processor = response_processor or ResponseProcessor()
 
     def handle_message(self, event: Dict[str, Any]) -> Dict[str, Any]:
         chat_id = event["chat_id"]
         user_id = event["user_id"]
         text = event["text"]
+        interaction_id = event.get("interaction_id", f"{chat_id}:{uuid4().hex[:12]}")
 
         relationship = event.get("relationship")
         if not relationship and self.relationship_manager:
@@ -88,6 +93,7 @@ class NotyBot:
                 "sarcasm_level": pre_recommendation.sarcasm_level,
                 "response_rate_bias": pre_recommendation.response_rate_bias,
             }
+            strategy_hints = self._build_strategy_hints(event)
             prompt = self.message_handler.prepare_prompt(
                 chat_id=chat_id,
                 user_id=user_id,
@@ -96,6 +102,7 @@ class NotyBot:
                 energy=mood_state["energy"],
                 user_relationship=relationship,
                 runtime_modifiers=runtime_modifiers,
+                strategy_hints=strategy_hints,
             )
 
             thought_entry = self.monologue.generate_thoughts(
@@ -105,6 +112,7 @@ class NotyBot:
                     "user_id": user_id,
                     "username": event.get("username", "unknown"),
                     "message": text,
+                    "interaction_id": interaction_id,
                     "relationship_score": event.get("relationship", {}).get("score", 0),
                     "mood": mood_state["mood"],
                     "energy": mood_state["energy"],
@@ -116,13 +124,35 @@ class NotyBot:
                 llm_response = self.api_rotator.call(messages=[{"role": "user", "content": prompt}])
 
             self.metrics.record_tokens(llm_response.get("usage"))
-            strategy = thought_entry.get("strategy", "balanced")
-            if strategy == "harsh_sarcasm":
+            strategy_name = thought_entry.get("strategy", "balanced")
+            applied_strategy = thought_entry.get("applied_strategy", {"name": strategy_name})
+            processed_response = self.response_processor.process(
+                llm_response=llm_response,
+                strategy=applied_strategy,
+                tools_registry=self.tool_executor.tools_registry,
+            )
+            if strategy_name == "harsh_sarcasm":
                 self.mood_manager.update_on_event("annoying_message")
             else:
                 self.mood_manager.update_on_event("interesting_topic")
             mood_after = self.mood_manager.get_current_state()
-            response_text = llm_response.get("content", "")
+            response_text = processed_response["text"]
+
+            tool_calls = processed_response.get("selected_tools", [])
+            tools_used = [t.get("name") for t in tool_calls if t.get("name")]
+            for tool_call in tool_calls:
+                tool_name = tool_call.get("name")
+                if not tool_name:
+                    continue
+                tool_info = self.tool_executor.tools_registry.get(tool_name, {})
+                if processed_response.get("confirmation_escalation"):
+                    tool_info["requires_confirmation"] = True
+                self.tool_executor.execute(
+                    tool_call,
+                    user_id=user_id,
+                    chat_id=chat_id,
+                    is_private=event.get("is_private", False),
+                )
 
             self._log_interaction(
                 event,
@@ -130,14 +160,14 @@ class NotyBot:
                 response_text=response_text,
                 mood_before=mood_state["mood"],
                 mood_after=mood_after["mood"],
-                tools_used=[],
+                tools_used=tools_used,
             )
             outcome = event.get("interaction_outcome", "success")
             self._update_memory_after_response(
                 event,
                 response_text=response_text,
                 outcome=outcome,
-                tone_used=strategy,
+                tone_used=strategy_name,
                 thought_quality=thought_entry.get("quality_score", 0.0),
             )
 
@@ -152,10 +182,23 @@ class NotyBot:
                 "text": response_text,
                 "usage": llm_response.get("usage", {}),
                 "finish_reason": llm_response.get("finish_reason"),
+                "strategy": processed_response.get("strategy_used", {}),
+                "interaction_id": interaction_id,
                 "metrics": self.metrics.snapshot(),
                 "filter_stats": self.message_handler.get_filter_stats(),
                 "adaptation": recommendation,
             }
+
+
+    @staticmethod
+    def _build_strategy_hints(event: Dict[str, Any]) -> Dict[str, Any]:
+        hints: Dict[str, Any] = {}
+        failed_topics = event.get("failed_topics", [])
+        if failed_topics:
+            hints["avoid_topics"] = failed_topics
+        if event.get("previous_interaction_outcome") == "fail":
+            hints.setdefault("avoid_topics", []).append("конфликт")
+        return hints
 
     def _log_interaction(
         self,
