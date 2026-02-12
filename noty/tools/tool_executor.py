@@ -12,6 +12,10 @@ from typing import Any, Callable, Dict
 
 
 class SafeToolExecutor:
+    @staticmethod
+    def _is_personality_action(function_name: str) -> bool:
+        return "personality" in function_name.lower()
+
     def __init__(self, owner_id: int, actions_log_dir: str = "./noty/data/logs/actions"):
         self.owner_id = owner_id
         self.pending_confirmations: Dict[str, Dict[str, Any]] = {}
@@ -41,6 +45,22 @@ class SafeToolExecutor:
             "risk_level": risk_level,
         }
 
+    def register_personality_tool(
+        self,
+        name: str,
+        function: Callable[..., Any],
+        description: str = "",
+        risk_level: str = "critical",
+    ):
+        self.register_tool(
+            name=name,
+            function=function,
+            requires_owner=True,
+            requires_confirmation=True,
+            description=description,
+            risk_level=risk_level,
+        )
+
     def execute(self, tool_call: Dict[str, Any], user_id: int, chat_id: int, is_private: bool) -> Dict[str, Any]:
         function_name = tool_call.get("name")
         if function_name not in self.tools_registry:
@@ -52,7 +72,20 @@ class SafeToolExecutor:
             return {"status": "validation_error", "message": "Аргументы инструмента должны быть объектом."}
 
         if tool_info["requires_owner"] and user_id != self.owner_id:
+
             return {"status": "forbidden", "message": "Недостаточно прав."}
+
+            if self._is_personality_action(function_name):
+                self._audit_dangerous_action(
+                    function_name=function_name,
+                    user_id=user_id,
+                    chat_id=chat_id,
+                    arguments=arguments,
+                    stage="access_denied",
+                    risk_level=tool_info.get("risk_level", "high"),
+                    error="owner_only",
+                )
+
         if tool_info["requires_private"] and not is_private:
             return {"status": "forbidden", "message": "Инструмент доступен только в ЛС."}
 
@@ -64,14 +97,15 @@ class SafeToolExecutor:
                 "chat_id": chat_id,
                 "expires_at": time.time() + 60,
             }
-            self._audit_dangerous_action(
-                function_name=function_name,
-                user_id=user_id,
-                chat_id=chat_id,
-                arguments=arguments,
-                stage="confirmation_requested",
-                risk_level=tool_info.get("risk_level", "low"),
-            )
+            if self._is_personality_action(function_name) or tool_info.get("risk_level") in {"high", "critical"}:
+                self._audit_dangerous_action(
+                    function_name=function_name,
+                    user_id=user_id,
+                    chat_id=chat_id,
+                    arguments=arguments,
+                    stage="confirmation_requested",
+                    risk_level=tool_info.get("risk_level", "low"),
+                )
             return {
                 "status": "awaiting_confirmation",
                 "confirmation_id": confirmation_id,
@@ -81,7 +115,7 @@ class SafeToolExecutor:
         try:
             result = self._execute_safely(tool_info["function"], arguments)
             self._log_execution(function_name, user_id, chat_id, arguments, result, "success")
-            if tool_info.get("risk_level") in {"high", "critical"}:
+            if self._is_personality_action(function_name) or tool_info.get("risk_level") in {"high", "critical"}:
                 self._audit_dangerous_action(
                     function_name=function_name,
                     user_id=user_id,
@@ -92,8 +126,13 @@ class SafeToolExecutor:
                 )
             return {"status": "success", "result": result, "message": f"✅ Выполнено: {function_name}"}
         except Exception as exc:  # noqa: BLE001
+
             self._log_execution(function_name, user_id, chat_id, arguments, None, "runtime_error", str(exc))
             if tool_info.get("risk_level") in {"high", "critical"}:
+
+            self._log_execution(function_name, user_id, chat_id, arguments, None, "error", str(exc))
+            if self._is_personality_action(function_name) or tool_info.get("risk_level") in {"high", "critical"}:
+
                 self._audit_dangerous_action(
                     function_name=function_name,
                     user_id=user_id,
@@ -121,10 +160,23 @@ class SafeToolExecutor:
 
         tool_call = pending["tool_call"]
         tool_info = self.tools_registry[tool_call["name"]]
+        if tool_info["requires_owner"] and pending["user_id"] != self.owner_id:
+            self._audit_dangerous_action(
+                function_name=tool_call["name"],
+                user_id=pending["user_id"],
+                chat_id=pending["chat_id"],
+                arguments=tool_call.get("arguments", {}),
+                stage="confirmed_access_denied",
+                risk_level=tool_info.get("risk_level", "high"),
+                error="owner_only",
+            )
+            del self.pending_confirmations[confirmation_id]
+            return {"status": "error", "message": "Недостаточно прав."}
+
         try:
             result = self._execute_safely(tool_info["function"], tool_call.get("arguments", {}))
             self._log_execution(tool_call["name"], pending["user_id"], pending["chat_id"], tool_call.get("arguments", {}), result, "success_confirmed")
-            if tool_info.get("risk_level") in {"high", "critical"} or tool_info.get("requires_confirmation"):
+            if self._is_personality_action(tool_call["name"]) or tool_info.get("risk_level") in {"high", "critical"} or tool_info.get("requires_confirmation"):
                 self._audit_dangerous_action(
                     function_name=tool_call["name"],
                     user_id=pending["user_id"],

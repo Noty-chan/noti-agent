@@ -33,26 +33,27 @@ class MessageHandler:
         decision = self.decide_reaction(message_text)
         return decision.should_respond
 
-    def decide_reaction(self, message_text: str) -> ReactionDecision:
+    def decide_reaction(self, message_text: str, scope: str | None = None) -> ReactionDecision:
         with self.metrics.time_block("filter_pipeline_seconds"):
             heuristic_passed = self.heuristic_filter.should_check_embeddings(message_text)
-            self.metrics.inc("messages_total")
+            self.metrics.inc("messages_total", scope=scope)
 
             if not heuristic_passed:
-                self.metrics.inc("heuristic_dropped")
+                self.metrics.inc("heuristic_dropped", scope=scope)
                 return ReactionDecision(False, 0.0, 1.0, 0.0, "heuristic_drop")
 
             is_interesting, score, _topic = self.embedding_filter.is_interesting(message_text, return_score=True)
             if not is_interesting:
-                self.metrics.inc("embedding_dropped")
+                self.metrics.inc("embedding_dropped", scope=scope)
 
             heuristic_boost = 0.1 if heuristic_passed else 0.0
             decision = self.reaction_decider.decide(score, heuristic_boost=heuristic_boost)
-            self.metrics.inc("responded_by_decider" if decision.should_respond else "randomized_drop")
+            self.metrics.inc("responded_by_decider" if decision.should_respond else "randomized_drop", scope=scope)
             return decision
 
     def prepare_prompt(
         self,
+        platform: str,
         chat_id: int,
         user_id: int,
         message_text: str,
@@ -60,9 +61,13 @@ class MessageHandler:
         energy: int = 100,
         user_relationship: Dict[str, Any] | None = None,
         runtime_modifiers: Dict[str, Any] | None = None,
+        strategy_hints: Dict[str, Any] | None = None,
     ) -> str:
         with self.metrics.time_block("context_build_seconds"):
-            context = self.context_builder.build_context(chat_id, message_text, user_id)
+            context = self.context_builder.build_context(platform, chat_id, message_text, user_id)
+
+            context = self.context_builder.build_context(chat_id, message_text, user_id, strategy_hints=strategy_hints)
+
         return self.prompt_builder.build_full_prompt(
             context=context,
             mood=mood,
