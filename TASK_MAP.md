@@ -60,16 +60,16 @@
 - [x] Динамическое влияние истории на стиль ответа.
 
 ### Фаза 5: Инструменты
-- [ ] Проверка ролей в `noty/core/response_processor.py` перед каждым `tool_call`.
+- [x] Проверка ролей в `noty/core/response_processor.py` перед каждым `tool_call`.
   **Критерий приемки:** при недостаточной роли возвращается `denied`, executor не вызывается.
   **Тестовый артефакт:** `tests/test_tool_execution_pipeline.py` (добавить кейс `denied_by_role`).
 - [ ] Двухшаговое подтверждение опасных команд в `noty/tools/safe_tool_executor.py` с idempotency-ключом.
   **Критерий приемки:** первый вызов -> `confirmation_required`, повтор с тем же ключом -> ровно одно исполнение.
   **Тестовый артефакт:** `tests/test_tool_confirmation_idempotency.py`.
-- [ ] Привязка moderation tool calls к VK/TG адаптерам в `noty/transport/*` с единым payload.
+- [x] Привязка moderation tool calls к VK/TG адаптерам в `noty/transport/*` с единым payload.
   **Критерий приемки:** `ban_user/delete_message` возвращают `status`, `platform_action_id`, `chat_id`, `reason`.
   **Тестовый артефакт:** `tests/test_chat_control_gateways.py`.
-- [ ] Пост-обработка tools в `noty/core/response_processor.py` только при `success`.
+- [x] Пост-обработка tools в `noty/core/response_processor.py` только при `success`.
   **Критерий приемки:** `mood` и `relationship` обновляются только для `success`; для `denied/failed` изменений нет.
   **Тестовый артефакт:** `tests/test_tool_execution_pipeline.py`.
 
@@ -139,10 +139,10 @@
 
 | Фаза / подзадача | Целевой тестовый файл (`tests/`) | Сценарий проверки | Статус |
 |---|---|---|---|
-| 5. Ролевой gate перед `tool_call` | `tests/test_tool_execution_pipeline.py` | Немодератор инициирует tool-call -> `denied`, executor не вызывается. | нужно обновить |
+| 5. Ролевой gate перед `tool_call` | `tests/test_tool_execution_pipeline.py` | Немодератор инициирует tool-call -> `denied`, executor не вызывается. | сделано |
 | 5. Двухшаговое подтверждение + idempotency | `tests/test_tool_confirmation_idempotency.py` | Первый вызов -> `confirmation_required`; второй с тем же ключом -> одно выполнение. | есть |
-| 5. Привязка moderation tool calls к VK/TG | `tests/test_chat_control_gateways.py` | `ban_user/delete_message` возвращают унифицированный payload. | нужно обновить |
-| 5. Пост-обработка tools только при `success` | `tests/test_tool_execution_pipeline.py` | `mood/relationship` меняются только при `success`. | нужно обновить |
+| 5. Привязка moderation tool calls к VK/TG | `tests/test_chat_control_gateways.py` | `ban_user/delete_message` возвращают унифицированный payload. | сделано |
+| 5. Пост-обработка tools только при `success` | `tests/test_tool_execution_pipeline.py` | `mood/relationship` меняются только при `success`. | сделано |
 | 8. Namespace-изоляция state | `tests/test_multichat_isolation.py` | Нет утечек state между чатами одного пользователя. | нужно обновить |
 | 8. Изоляция динамического контекста | `tests/test_multichat_isolation.py` | `recent/semantic/important` не содержат чужие сообщения. | нужно обновить |
 | 8. Contract routing-key и поля события | `tests/test_transport_event_contract.py` | `platform/chat_id/user_id` обязательны, routing-key стабилен. | нужно обновить |

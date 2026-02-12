@@ -79,6 +79,26 @@ def test_response_processor_executes_tool_calls_and_merges_text(tmp_path):
     assert "✅ Выполнено: echo" in result.text
 
 
+
+
+def test_response_processor_denied_by_role_before_executor(tmp_path):
+    calls = {"count": 0}
+
+    def _owner_tool() -> str:
+        calls["count"] += 1
+        return "ok"
+
+    executor = SafeToolExecutor(owner_id=1, actions_log_dir=str(tmp_path))
+    executor.register_tool("owner_tool", _owner_tool, allowed_roles=["owner", "moderator"])
+    processor = ResponseProcessor(tool_executor=executor)
+
+    llm_response = {"content": "Пробую.", "tool_calls": [{"name": "owner_tool", "arguments": {}}]}
+    result = processor.process(llm_response, user_id=2, chat_id=10, is_private=False, user_role="user")
+
+    assert result.status == "denied"
+    assert result.tool_results[0]["status"] == "denied"
+    assert calls["count"] == 0
+
 def test_response_processor_returns_awaiting_confirmation_status(tmp_path):
     executor = SafeToolExecutor(owner_id=1, actions_log_dir=str(tmp_path))
     executor.register_tool("echo", _echo, requires_confirmation=True, risk_level="high")
@@ -124,3 +144,27 @@ def test_bot_post_processing_writes_tools_and_updates_relationship(tmp_path):
     row = conn.execute("SELECT tools_used FROM interactions ORDER BY id DESC LIMIT 1").fetchone()
     conn.close()
     assert row[0] == "echo"
+
+
+def test_bot_post_processing_skips_mood_and_relationship_on_tool_denied(tmp_path):
+    db = SQLiteDBManager(str(tmp_path / "noty.db"))
+    executor = SafeToolExecutor(owner_id=1, actions_log_dir=str(tmp_path / "actions"))
+    executor.register_tool("echo", _echo, allowed_roles=["moderator"])
+    relationship = _RelationshipStub()
+    mood = MoodManager()
+
+    bot = NotyBot(
+        api_rotator=_RotatorStub(),
+        message_handler=_MessageHandlerStub(),
+        mood_manager=mood,
+        tool_executor=executor,
+        monologue=_MonologueStub(),
+        db_manager=db,
+        relationship_manager=relationship,
+    )
+
+    result = bot.handle_message({"chat_id": 1, "user_id": 1, "text": "сделай", "username": "u1", "user_role": "user"})
+    assert result["status"] == "denied"
+    assert result["tool_results"][0]["status"] == "denied"
+    assert relationship.updated_outcomes == []
+

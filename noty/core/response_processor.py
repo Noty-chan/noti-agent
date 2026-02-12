@@ -45,6 +45,7 @@ class ResponseProcessor:
             user_id=int(kwargs["user_id"]),
             chat_id=int(kwargs["chat_id"]),
             is_private=bool(kwargs["is_private"]),
+            user_role=kwargs.get("user_role"),
         )
 
     @staticmethod
@@ -103,7 +104,15 @@ class ResponseProcessor:
             "strategy_used": active_strategy,
         }
 
-    def _process_execution(self, llm_response: Dict[str, Any], *, user_id: int, chat_id: int, is_private: bool) -> ResponseProcessingResult:
+    def _process_execution(
+        self,
+        llm_response: Dict[str, Any],
+        *,
+        user_id: int,
+        chat_id: int,
+        is_private: bool,
+        user_role: str | None = None,
+    ) -> ResponseProcessingResult:
         content = llm_response.get("content") or ""
         tool_calls = llm_response.get("tool_calls") or []
 
@@ -121,6 +130,12 @@ class ResponseProcessor:
                 tool_results.append({"name": "unknown", "status": "validation_error", "message": "Некорректный format tool_call."})
                 continue
 
+            denied = self._deny_by_role_if_needed(normalized["name"], user_role=user_role)
+            if denied:
+                tool_results.append(denied)
+                tools_used.append(normalized["name"])
+                continue
+
             result = self.tool_executor.execute(normalized, user_id=user_id, chat_id=chat_id, is_private=is_private)
             tool_results.append({"name": normalized["name"], **result})
             tools_used.append(normalized["name"])
@@ -128,6 +143,27 @@ class ResponseProcessor:
         final_status = self._derive_status(tool_results)
         outcome = "success" if final_status in {"success", "awaiting_confirmation"} else "negative"
         return ResponseProcessingResult(final_status, self._build_user_text(content, tool_results), tools_used, tool_results, outcome)
+
+
+    def _deny_by_role_if_needed(self, tool_name: str, *, user_role: str | None) -> Dict[str, Any] | None:
+        if not self.tool_executor:
+            return None
+        tool_info = self.tool_executor.tools_registry.get(tool_name, {})
+        allowed_roles = tool_info.get("allowed_roles") or []
+        if not allowed_roles:
+            return None
+
+        normalized_role = (user_role or "user").lower()
+        if normalized_role in allowed_roles:
+            return None
+
+        return {
+            "name": tool_name,
+            "status": "denied",
+            "message": f"Недостаточно роли для инструмента {tool_name}.",
+            "required_roles": allowed_roles,
+            "actual_role": normalized_role,
+        }
 
     @staticmethod
     def _normalize_tool_call(tool_call: Any) -> Dict[str, Any]:
@@ -156,6 +192,8 @@ class ResponseProcessor:
             return "awaiting_confirmation"
         if statuses and statuses.issubset({"success"}):
             return "success"
+        if "denied" in statuses:
+            return "denied"
         if "forbidden" in statuses:
             return "forbidden"
         if "validation_error" in statuses:
