@@ -59,6 +59,7 @@ class MessageHandler:
         mood: str = "neutral",
         energy: int = 100,
         user_relationship: Dict[str, Any] | None = None,
+        runtime_modifiers: Dict[str, Any] | None = None,
     ) -> str:
         with self.metrics.time_block("context_build_seconds"):
             context = self.context_builder.build_context(chat_id, message_text, user_id)
@@ -67,6 +68,7 @@ class MessageHandler:
             mood=mood,
             energy=energy,
             user_relationship=user_relationship,
+            runtime_modifiers=runtime_modifiers,
         )
 
     def get_filter_stats(self) -> Dict[str, Any]:

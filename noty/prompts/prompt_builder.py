@@ -16,7 +16,7 @@ class ModularPromptBuilder:
         self.versions_dir.mkdir(exist_ok=True)
         self.base_core = self._load_or_create("base_core.txt", self._default_base_core())
         self.safety_rules = self._load_or_create("safety_rules.txt", self._default_safety())
-        self.personality_layer = self._load_current_personality()
+        self.personality_layer, self.current_personality_version = self._load_current_personality_with_version()
 
     def _load_or_create(self, filename: str, default_content: str) -> str:
         path = self.prompts_dir / filename
@@ -25,15 +25,36 @@ class ModularPromptBuilder:
         path.write_text(default_content, encoding="utf-8")
         return default_content
 
-    def _load_current_personality(self) -> str:
+    def _load_current_personality_with_version(self) -> tuple[str, int]:
         current = self.versions_dir / "current.txt"
         if current.exists():
-            return current.read_text(encoding="utf-8")
+            current_text = current.read_text(encoding="utf-8")
+            for path in self.versions_dir.glob("personality_v*.txt"):
+                if path.read_text(encoding="utf-8") == current_text:
+                    try:
+                        return current_text, int(path.stem.replace("personality_v", ""))
+                    except ValueError:
+                        continue
+            return current_text, 1
         default = self._default_personality()
         v1 = self.versions_dir / "personality_v1.txt"
         v1.write_text(default, encoding="utf-8")
         current.write_text(default, encoding="utf-8")
-        return default
+        return default, 1
+
+    def _build_personality_layer(self, runtime_modifiers: Optional[Dict[str, Any]] = None) -> str:
+        modifiers = runtime_modifiers or {}
+        preferred_tone = modifiers.get("preferred_tone", "medium_sarcasm")
+        sarcasm_level = float(modifiers.get("sarcasm_level", 0.5))
+        response_rate_bias = float(modifiers.get("response_rate_bias", 0.0))
+        return (
+            f"{self.personality_layer}\n\n"
+            "RUNTIME PERSONALITY MODIFIERS:\n"
+            f"- personality_version: v{self.current_personality_version}\n"
+            f"- preferred_tone: {preferred_tone}\n"
+            f"- sarcasm_level: {sarcasm_level:.2f} (0..1)\n"
+            f"- response_rate_bias: {response_rate_bias:+.2f}"
+        )
 
     def build_full_prompt(
         self,
@@ -41,11 +62,13 @@ class ModularPromptBuilder:
         mood: str = "neutral",
         energy: int = 100,
         user_relationship: Optional[Dict[str, Any]] = None,
+        runtime_modifiers: Optional[Dict[str, Any]] = None,
     ) -> str:
+        personality_layer = self._build_personality_layer(runtime_modifiers)
         return (
             f"{self.base_core}\n\n"
             "═══════════════════════════════════════════════════════════\n\n"
-            f"{self.personality_layer}\n\n"
+            f"{personality_layer}\n\n"
             "═══════════════════════════════════════════════════════════\n\n"
             f"{self._generate_mood_layer(mood, energy)}\n\n"
             "═══════════════════════════════════════════════════════════\n\n"
@@ -126,7 +149,7 @@ class ModularPromptBuilder:
         if not version_path.exists():
             raise ValueError(f"Версия {version} не найдена")
         (self.versions_dir / "current.txt").write_text(version_path.read_text(encoding="utf-8"), encoding="utf-8")
-        self.personality_layer = self._load_current_personality()
+        self.personality_layer, self.current_personality_version = self._load_current_personality_with_version()
 
     def list_personality_versions(self) -> list[int]:
         versions = []
@@ -150,7 +173,7 @@ class ModularPromptBuilder:
             raise ValueError(f"Версия {target_version} не найдена")
 
         self.approve_personality_version(target_version)
-        self.personality_layer = self._load_current_personality()
+        self.personality_layer, self.current_personality_version = self._load_current_personality_with_version()
         return target_version
 
     @staticmethod
