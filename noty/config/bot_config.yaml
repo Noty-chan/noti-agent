@@ -5,3 +5,14 @@ bot:
   max_context_tokens: 3000
   cheap_thought_model: "meta-llama/llama-3.1-8b-instruct"
   response_model: "meta-llama/llama-3.1-70b-instruct"
+
+transport:
+  mode: "dry_run" # vk_longpoll | vk_webhook | dry_run
+  owner_id: 0
+  vk_token: ""
+  vk_group_id: 0
+  vk_api_version: "5.199"
+  vk_confirmation_token: ""
+  timeout_seconds: 25
+  state_path: "./noty/data/vk_state.json"
+  dedup_cache_size: 5000
