@@ -63,7 +63,7 @@
 - [x] Проверка ролей в `noty/core/response_processor.py` перед каждым `tool_call`.
   **Критерий приемки:** при недостаточной роли возвращается `denied`, executor не вызывается.
   **Тестовый артефакт:** `tests/test_tool_execution_pipeline.py` (добавить кейс `denied_by_role`).
-- [ ] Двухшаговое подтверждение опасных команд в `noty/tools/safe_tool_executor.py` с idempotency-ключом.
+- [x] Двухшаговое подтверждение опасных команд в `noty/tools/safe_tool_executor.py` с idempotency-ключом.
   **Критерий приемки:** первый вызов -> `confirmation_required`, повтор с тем же ключом -> ровно одно исполнение.
   **Тестовый артефакт:** `tests/test_tool_confirmation_idempotency.py`.
 - [x] Привязка moderation tool calls к VK/TG адаптерам в `noty/transport/*` с единым payload.
@@ -83,7 +83,7 @@
 - [x] Namespace-ключи в `noty/memory/session_state.py`: `{platform}:{chat_id}:{user_id}`.
   **Критерий приемки:** состояние одного чата не читается и не изменяется из другого чата того же пользователя.
   **Тестовый артефакт:** `tests/test_multichat_isolation.py` (добавить кейс namespace state).
-- [ ] Изоляция динамического контекста в `noty/core/context_manager.py` по `chat_id` + `thread_id`.
+- [x] Изоляция динамического контекста в `noty/core/context_manager.py` по `chat_id` + `thread_id`.
   **Критерий приемки:** блоки `recent/semantic/important` не содержат сообщений из соседних чатов.
   **Тестовый артефакт:** `tests/test_multichat_isolation.py` (добавить кейс context split).
 - [x] Маршрутизация в `noty/transport/router.py` с обязательным пробросом `platform/chat_id/user_id`.
@@ -116,10 +116,10 @@
 
 ## Контракт мультичат-изоляции (`chat_id` scope)
 - [x] `session_state`: все чтения/записи строго по ключу `{platform}:{chat_id}:{user_id}`; без fallback на “последний активный чат”.
-- [ ] `context_manager`: `recent/semantic/important` собираются только из того же `platform+chat_id+thread_id`.
+- [x] `context_manager`: `recent/semantic/important` собираются только из того же `platform+chat_id+thread_id`.
 - [x] `router`: каждое событие обязано содержать `platform`, `chat_id`, `user_id`; отсутствие любого поля = hard reject.
-- [ ] `response_processor/tools`: tool execution и memory updates используют текущий `chat_id` из routing context, без глобальных синглтонов.
-- [ ] Чекбокс готовности фазы 8: «контракт принят + `tests/test_multichat_isolation.py` и `tests/test_transport_event_contract.py` зелёные».
+- [x] `response_processor/tools`: tool execution и memory updates используют текущий `chat_id` из routing context, без глобальных синглтонов.
+- [x] Чекбокс готовности фазы 8: «контракт принят + `tests/test_multichat_isolation.py` и `tests/test_transport_event_contract.py` зелёные».
 
 ## Sprint-1 (2 недели)
 
@@ -140,11 +140,11 @@
 | Фаза / подзадача | Целевой тестовый файл (`tests/`) | Сценарий проверки | Статус |
 |---|---|---|---|
 | 5. Ролевой gate перед `tool_call` | `tests/test_tool_execution_pipeline.py` | Немодератор инициирует tool-call -> `denied`, executor не вызывается. | сделано |
-| 5. Двухшаговое подтверждение + idempotency | `tests/test_tool_confirmation_idempotency.py` | Первый вызов -> `confirmation_required`; второй с тем же ключом -> одно выполнение. | есть |
+| 5. Двухшаговое подтверждение + idempotency | `tests/test_tool_confirmation_idempotency.py` | Первый вызов -> `confirmation_required`; второй с тем же ключом -> одно выполнение. | сделано |
 | 5. Привязка moderation tool calls к VK/TG | `tests/test_chat_control_gateways.py` | `ban_user/delete_message` возвращают унифицированный payload. | сделано |
 | 5. Пост-обработка tools только при `success` | `tests/test_tool_execution_pipeline.py` | `mood/relationship` меняются только при `success`. | сделано |
 | 8. Namespace-изоляция state | `tests/test_multichat_isolation.py` | Нет утечек state между чатами одного пользователя. | сделано |
-| 8. Изоляция динамического контекста | `tests/test_multichat_isolation.py` | `recent/semantic/important` не содержат чужие сообщения. | нужно обновить |
+| 8. Изоляция динамического контекста | `tests/test_multichat_isolation.py` | `recent/semantic/important` не содержат чужие сообщения. | сделано |
 | 8. Contract routing-key и поля события | `tests/test_transport_event_contract.py` | `platform/chat_id/user_id` обязательны, routing-key стабилен. | сделано |
 | 8. TTL на уровне namespace | `tests/test_session_state.py`, `tests/test_session_state_ttl_namespaces.py` | Истекает только целевой namespace. | сделано |
 | 9. Метрики p50/p95 + token-cost по stage | `tests/test_metrics_pipeline_stages.py` | Метрики экспортируются по этапам и платформам. | сделано |
@@ -167,4 +167,3 @@
 2. Метрики фильтрации и стоимости.
 3. Автообновление памяти/отношений после ответа.
 4. Тестовый контур.
-
