@@ -1,47 +1,37 @@
-
-"""Утилиты нормализации событий и формирования scope-ключей."""
-
-from __future__ import annotations
-
-from typing import Any, Dict
-
-
-def build_scope(platform: str, chat_id: int, thread_id: int | None = None) -> str:
-    """Формирует единый ключ контекста: platform:chat_id[:thread_id]."""
-    base = f"{platform}:{chat_id}"
-    if thread_id is None:
-        return base
-    return f"{base}:{thread_id}"
-
-
-def enrich_event_scope(event: Dict[str, Any], default_platform: str = "unknown") -> Dict[str, Any]:
-    """Добавляет в событие вычисленный scope и нормализованную платформу."""
-    platform = str(event.get("platform") or default_platform)
-    chat_id = int(event["chat_id"])
-    thread_id = event.get("thread_id")
-    if thread_id is not None:
-        thread_id = int(thread_id)
-
-    enriched = dict(event)
-    enriched["platform"] = platform
-    enriched["scope"] = build_scope(platform=platform, chat_id=chat_id, thread_id=thread_id)
-    return enriched
-
-
-"""DTO входящих событий и JSONL-логирование взаимодействий."""
+"""DTO входящих событий, scope-утилиты и JSONL-логирование."""
 
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, is_dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Mapping
+
+
+def build_scope(platform: str, chat_id: int, thread_id: int | None = None) -> str:
+    """Формирует ключ контекста: platform:chat_id[:thread_id]."""
+    base = f"{platform}:{chat_id}"
+    return base if thread_id is None else f"{base}:{thread_id}"
+
+
+def enrich_event_scope(event: Mapping[str, Any], default_platform: str = "unknown") -> Dict[str, Any]:
+    """Добавляет в payload нормализованную платформу и scope."""
+    payload = dict(event)
+    platform = str(payload.get("platform") or default_platform)
+    chat_id = int(payload["chat_id"])
+    thread_id = payload.get("thread_id")
+    if thread_id is not None:
+        thread_id = int(thread_id)
+
+    payload["platform"] = platform
+    payload["scope"] = build_scope(platform=platform, chat_id=chat_id, thread_id=thread_id)
+    return payload
 
 
 @dataclass(slots=True)
 class IncomingEvent:
-    """Единый формат события для NotyBot.handle_message."""
+    """Legacy-совместимый формат события для core-обработчиков."""
 
     platform: str
     chat_id: int
@@ -58,7 +48,7 @@ class IncomingEvent:
 
 
 class InteractionJSONLLogger:
-    """Полное логирование входящих/исходящих событий в daily jsonl."""
+    """Логирует входящие и исходящие события в дневные jsonl-файлы."""
 
     def __init__(self, logs_dir: str = "./noty/data/logs/interactions"):
         self.logs_dir = Path(logs_dir)
@@ -67,21 +57,31 @@ class InteractionJSONLLogger:
     def _file_for_today(self) -> Path:
         return self.logs_dir / f"{datetime.now().strftime('%Y-%m-%d')}.jsonl"
 
-    def log_incoming(self, event: IncomingEvent) -> None:
+    @staticmethod
+    def _as_payload(event: Any) -> Dict[str, Any]:
+        if hasattr(event, "to_dict"):
+            return event.to_dict()
+        if is_dataclass(event):
+            return asdict(event)
+        if isinstance(event, Mapping):
+            return dict(event)
+        return {"repr": repr(event)}
+
+    def log_incoming(self, event: Any) -> None:
         self._append(
             {
                 "timestamp": datetime.now().isoformat(),
                 "direction": "incoming",
-                "event": event.to_dict(),
+                "event": self._as_payload(event),
             }
         )
 
-    def log_outgoing(self, event: IncomingEvent, payload: Dict[str, Any]) -> None:
+    def log_outgoing(self, event: Any, payload: Dict[str, Any]) -> None:
         self._append(
             {
                 "timestamp": datetime.now().isoformat(),
                 "direction": "outgoing",
-                "event": event.to_dict(),
+                "event": self._as_payload(event),
                 "payload": payload,
             }
         )
@@ -89,4 +89,3 @@ class InteractionJSONLLogger:
     def _append(self, entry: Dict[str, Any]) -> None:
         with open(self._file_for_today(), "a", encoding="utf-8") as fh:
             fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
-

@@ -1,14 +1,5 @@
+"""VK transport namespace."""
 
-from noty.transport.vk.mapper import map_vk_event
+from .mapper import map_vk_event, map_vk_update_to_incoming_event
 
-__all__ = ["map_vk_event"]
-
-"""VK transport (longpoll/webhook)."""
-
-from .client import VKAPIClient
-from .polling import VKLongPollTransport
-from .state_store import VKStateStore
-from .webhook import VKWebhookHandler
-
-__all__ = ["VKAPIClient", "VKLongPollTransport", "VKStateStore", "VKWebhookHandler"]
-
+__all__ = ["map_vk_event", "map_vk_update_to_incoming_event"]

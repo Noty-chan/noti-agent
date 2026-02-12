@@ -31,18 +31,13 @@ class MessageHandler:
         self.metrics = metrics or MetricsCollector()
 
     def should_react(self, message_text: str) -> bool:
-        decision = self.decide_reaction(message_text)
-        return decision.should_respond
-
+        return self.decide_reaction(message_text).should_respond
 
     def should_react_to_event(self, event: IncomingEvent | Dict[str, Any]) -> bool:
         normalized = normalize_incoming_event(event)
         return self.should_react(normalized.text)
 
-    def decide_reaction(self, message_text: str) -> ReactionDecision:
-
     def decide_reaction(self, message_text: str, scope: str | None = None) -> ReactionDecision:
-
         with self.metrics.time_block("filter_pipeline_seconds"):
             heuristic_passed = self.heuristic_filter.should_check_embeddings(message_text)
             self.metrics.inc("messages_total", scope=scope)
@@ -73,9 +68,13 @@ class MessageHandler:
         strategy_hints: Dict[str, Any] | None = None,
     ) -> str:
         with self.metrics.time_block("context_build_seconds"):
-            context = self.context_builder.build_context(platform, chat_id, message_text, user_id)
-
-            context = self.context_builder.build_context(chat_id, message_text, user_id, strategy_hints=strategy_hints)
+            context = self.context_builder.build_context(
+                chat_id=chat_id,
+                current_message=message_text,
+                user_id=user_id,
+                strategy_hints=strategy_hints,
+                platform=platform,
+            )
 
         return self.prompt_builder.build_full_prompt(
             context=context,
@@ -86,7 +85,4 @@ class MessageHandler:
         )
 
     def get_filter_stats(self) -> Dict[str, Any]:
-        return {
-            "decider": self.reaction_decider.stats(),
-            "metrics": self.metrics.snapshot(),
-        }
+        return {"decider": self.reaction_decider.stats(), "metrics": self.metrics.snapshot()}

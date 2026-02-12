@@ -6,6 +6,12 @@ from .events import IncomingEvent
 from .message_handler import MessageHandler
 from .response_processor import ResponseProcessor
 
-__all__ = ["APIRotator", "NotyBot", "DynamicContextBuilder", "IncomingEvent", "MessageHandler", "MessageHandler", "AdaptationEngine", "ResponseProcessor"]
-
-
+__all__ = [
+    "APIRotator",
+    "NotyBot",
+    "DynamicContextBuilder",
+    "IncomingEvent",
+    "MessageHandler",
+    "AdaptationEngine",
+    "ResponseProcessor",
+]
