@@ -89,6 +89,20 @@ class SQLiteDBManager:
                 reviewer TEXT
             );
 
+            CREATE TABLE IF NOT EXISTS user_persona_profiles (
+                user_id INTEGER NOT NULL,
+                chat_id INTEGER NOT NULL,
+                preferred_style TEXT DEFAULT 'balanced',
+                sarcasm_tolerance REAL DEFAULT 0.5,
+                taboo_topics TEXT DEFAULT '[]',
+                motivators TEXT DEFAULT '[]',
+                response_depth_preference TEXT DEFAULT 'medium',
+                confidence REAL DEFAULT 0.0,
+                source TEXT DEFAULT 'default',
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (user_id, chat_id)
+            );
+
             """
         )
         interaction_cols = {row[1] for row in cur.execute("PRAGMA table_info(interactions)").fetchall()}
@@ -162,6 +176,67 @@ class SQLiteDBManager:
             WHERE id = ?
             """,
             (decision, reviewer, proposal_id),
+        )
+        conn.commit()
+        conn.close()
+
+    def get_user_persona_profile(self, user_id: int, chat_id: int) -> Dict[str, Any] | None:
+        conn = self._connect()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT preferred_style, sarcasm_tolerance, taboo_topics, motivators,
+                   response_depth_preference, confidence, source
+            FROM user_persona_profiles
+            WHERE user_id=? AND chat_id=?
+            """,
+            (user_id, chat_id),
+        )
+        row = cur.fetchone()
+        conn.close()
+        if not row:
+            return None
+        return {
+            "preferred_style": row["preferred_style"],
+            "sarcasm_tolerance": float(row["sarcasm_tolerance"] or 0.0),
+            "taboo_topics": __import__("json").loads(row["taboo_topics"] or "[]"),
+            "motivators": __import__("json").loads(row["motivators"] or "[]"),
+            "response_depth_preference": row["response_depth_preference"],
+            "confidence": float(row["confidence"] or 0.0),
+            "source": row["source"] or "default",
+        }
+
+    def upsert_user_persona_profile(self, user_id: int, chat_id: int, profile: Dict[str, Any]) -> None:
+        conn = self._connect()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO user_persona_profiles (
+                user_id, chat_id, preferred_style, sarcasm_tolerance, taboo_topics,
+                motivators, response_depth_preference, confidence, source, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(user_id, chat_id) DO UPDATE SET
+                preferred_style=excluded.preferred_style,
+                sarcasm_tolerance=excluded.sarcasm_tolerance,
+                taboo_topics=excluded.taboo_topics,
+                motivators=excluded.motivators,
+                response_depth_preference=excluded.response_depth_preference,
+                confidence=excluded.confidence,
+                source=excluded.source,
+                updated_at=CURRENT_TIMESTAMP
+            """,
+            (
+                user_id,
+                chat_id,
+                profile.get("preferred_style", "balanced"),
+                float(profile.get("sarcasm_tolerance", 0.5)),
+                __import__("json").dumps(profile.get("taboo_topics", []), ensure_ascii=False),
+                __import__("json").dumps(profile.get("motivators", []), ensure_ascii=False),
+                profile.get("response_depth_preference", "medium"),
+                float(profile.get("confidence", 0.0)),
+                profile.get("source", "default"),
+            ),
         )
         conn.commit()
         conn.close()

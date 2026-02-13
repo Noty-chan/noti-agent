@@ -16,6 +16,9 @@ class ResponseProcessingResult:
     tools_used: List[str]
     tool_results: List[Dict[str, Any]]
     outcome: str
+    style_match_score: float = 0.0
+    sarcasm_intensity: float = 0.0
+    persona_confidence: float = 0.0
 
 
 class ResponseProcessor:
@@ -31,10 +34,6 @@ class ResponseProcessor:
         }
 
     def process(self, llm_response: Dict[str, Any], **kwargs):
-        """Поддерживает два режима:
-        1) strategy-only (возвращает dict) — для интеграции монолога;
-        2) tool-execution (возвращает ResponseProcessingResult).
-        """
         if "strategy" in kwargs or "tools_registry" in kwargs:
             strategy = kwargs.get("strategy")
             tools_registry = kwargs.get("tools_registry") or {}
@@ -46,6 +45,7 @@ class ResponseProcessor:
             chat_id=int(kwargs["chat_id"]),
             is_private=bool(kwargs["is_private"]),
             user_role=kwargs.get("user_role"),
+            persona_profile=kwargs.get("persona_profile") or {},
         )
 
     @staticmethod
@@ -112,14 +112,18 @@ class ResponseProcessor:
         chat_id: int,
         is_private: bool,
         user_role: str | None = None,
+        persona_profile: Dict[str, Any] | None = None,
     ) -> ResponseProcessingResult:
         content = llm_response.get("content") or ""
         tool_calls = llm_response.get("tool_calls") or []
+        persona_profile = persona_profile or {}
+
+        checked_text, quality = self._persona_post_check(content, persona_profile)
 
         if not tool_calls:
-            return ResponseProcessingResult("responded", content, [], [], "success")
+            return ResponseProcessingResult("responded", checked_text, [], [], "success", **quality)
         if not self.tool_executor:
-            return ResponseProcessingResult("validation_error", content, [], [], "negative")
+            return ResponseProcessingResult("validation_error", checked_text, [], [], "negative", **quality)
 
         tool_results: List[Dict[str, Any]] = []
         tools_used: List[str] = []
@@ -142,8 +146,47 @@ class ResponseProcessor:
 
         final_status = self._derive_status(tool_results)
         outcome = "success" if final_status in {"success", "awaiting_confirmation"} else "negative"
-        return ResponseProcessingResult(final_status, self._build_user_text(content, tool_results), tools_used, tool_results, outcome)
+        return ResponseProcessingResult(final_status, self._build_user_text(checked_text, tool_results), tools_used, tool_results, outcome, **quality)
 
+    def _persona_post_check(self, text: str, persona_profile: Dict[str, Any]) -> tuple[str, Dict[str, float]]:
+        lowered = text.lower()
+        taboo_topics = [str(t).lower() for t in persona_profile.get("taboo_topics", [])]
+        depth_pref = persona_profile.get("response_depth_preference", "medium")
+        sarcasm_tolerance = float(persona_profile.get("sarcasm_tolerance", 0.5))
+        confidence = float(persona_profile.get("confidence", 0.0))
+
+        sarcasm_intensity = min(1.0, sum(lowered.count(marker) for marker in ("ну конечно", "ага", "супер")) / 3)
+        too_sharp = sarcasm_intensity > sarcasm_tolerance
+
+        taboo_hit = any(topic and topic in lowered for topic in taboo_topics)
+        if taboo_hit:
+            text = "Сменю тему на более уместную и безопасную для тебя."
+
+        sentence_count = len([p for p in text.replace("!", ".").replace("?", ".").split(".") if p.strip()])
+        if depth_pref == "short" and sentence_count > 2:
+            parts = [p.strip() for p in text.split(".") if p.strip()][:2]
+            text = ". ".join(parts) + "."
+        elif depth_pref == "deep" and sentence_count < 3 and text.strip():
+            text = f"{text.strip()} Добавлю деталей: ключевые шаги и риски стоит разобрать отдельно."
+
+        if too_sharp:
+            text = text.replace("Ну конечно", "Понимаю").replace("ага", "хорошо")
+
+        style_match = 1.0
+        if too_sharp:
+            style_match -= 0.35
+        if taboo_hit:
+            style_match -= 0.35
+        if depth_pref == "short" and sentence_count > 2:
+            style_match -= 0.15
+        if depth_pref == "deep" and sentence_count < 3:
+            style_match -= 0.15
+
+        return text, {
+            "style_match_score": max(0.0, round(style_match, 3)),
+            "sarcasm_intensity": round(sarcasm_intensity, 3),
+            "persona_confidence": round(confidence, 3),
+        }
 
     def _deny_by_role_if_needed(self, tool_name: str, *, user_role: str | None) -> Dict[str, Any] | None:
         if not self.tool_executor:
