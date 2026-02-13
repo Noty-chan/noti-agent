@@ -13,6 +13,7 @@ from noty.core.message_handler import MessageHandler
 from noty.core.response_processor import ResponseProcessor
 from noty.memory.mem0_wrapper import Mem0Wrapper
 from noty.memory.relationship_manager import RelationshipManager
+from noty.memory.persona_profile import PersonaProfileManager
 from noty.memory.session_state import SessionStateStore
 from noty.memory.sqlite_db import SQLiteDBManager
 from noty.mood.mood_manager import MoodManager
@@ -38,6 +39,7 @@ class NotyBot:
         interaction_logger: InteractionJSONLLogger | None = None,
         adaptation_engine: AdaptationEngine | None = None,
         response_processor: ResponseProcessor | None = None,
+        persona_manager: PersonaProfileManager | None = None,
     ):
         self.api_rotator = api_rotator
         self.message_handler = message_handler
@@ -52,6 +54,7 @@ class NotyBot:
         self.interaction_logger = interaction_logger or InteractionJSONLLogger()
         self.adaptation_engine = adaptation_engine or AdaptationEngine()
         self.response_processor = response_processor or ResponseProcessor(tool_executor=self.tool_executor)
+        self.persona_manager = persona_manager or (PersonaProfileManager(db_manager=self.db_manager) if self.db_manager else None)
         self.logger = logging.getLogger(__name__)
 
     def handle_message(self, event: Mapping[str, Any]) -> Dict[str, Any]:
@@ -128,6 +131,17 @@ class NotyBot:
             global_memory_summary = self._get_global_memory_summary(user_id=user_id, platform=platform, chat_id=chat_id)
             self.logger.info("Сформирована глобальная память: user_id=%s chars=%s", user_id, len(global_memory_summary))
 
+            persona_profile = self.persona_manager.update_from_dialogue(user_id=user_id, chat_id=chat_id, text=text) if self.persona_manager else None
+            runtime_modifiers = {
+                "preferred_tone": pre_recommendation.preferred_tone,
+                "sarcasm_level": pre_recommendation.sarcasm_level,
+                "response_rate_bias": pre_recommendation.response_rate_bias,
+            }
+            if persona_profile and self.persona_manager and self.persona_manager.should_use_conservative_fallback(persona_profile):
+                pb_config = getattr(self.message_handler.prompt_builder, "config", {}) or {}
+                fallback = pb_config.get("conservative_fallback", {})
+                runtime_modifiers.update(fallback)
+
             prompt = self.message_handler.prepare_prompt(
                 platform=platform,
                 chat_id=chat_id,
@@ -136,12 +150,9 @@ class NotyBot:
                 mood=mood_state["mood"],
                 energy=mood_state["energy"],
                 user_relationship=relationship,
-                runtime_modifiers={
-                    "preferred_tone": pre_recommendation.preferred_tone,
-                    "sarcasm_level": pre_recommendation.sarcasm_level,
-                    "response_rate_bias": pre_recommendation.response_rate_bias,
-                },
+                runtime_modifiers=runtime_modifiers,
                 strategy_hints=self._build_strategy_hints(payload),
+                persona_profile=persona_profile.compact_slice() if persona_profile else {},
             )
             if global_memory_summary:
                 prompt = f"{prompt}\n\nGLOBAL_NOTY_MEMORY:\n{global_memory_summary}"
@@ -181,6 +192,7 @@ class NotyBot:
                 chat_id=chat_id,
                 is_private=bool(event_data.get("is_private", False)),
                 user_role=str(event_data.get("user_role", payload.get("user_role", "user"))),
+                persona_profile=persona_profile.compact_slice() if persona_profile else {},
             )
             self._apply_tool_post_processing(processing_result.tool_results)
 
@@ -221,6 +233,11 @@ class NotyBot:
                 "metrics": self.metrics.snapshot(),
                 "filter_stats": self.message_handler.get_filter_stats(),
                 "adaptation": recommendation,
+                "persona_metrics": {
+                    "style_match_score": processing_result.style_match_score,
+                    "sarcasm_intensity": processing_result.sarcasm_intensity,
+                    "persona_confidence": processing_result.persona_confidence,
+                },
             }
             self.interaction_logger.log_outgoing(event_data, result)
             return result

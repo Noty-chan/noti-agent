@@ -43,6 +43,7 @@ class DynamicContextBuilder:
         user_id: int,
         strategy_hints: Dict[str, Any] | None = None,
         platform: str = "unknown",
+        persona_slice: Dict[str, Any] | None = None,
     ) -> Dict[str, Any]:
         context_messages: List[Dict[str, Any]] = []
         used_tokens = 0
@@ -148,6 +149,7 @@ class DynamicContextBuilder:
             "summary": summary,
             "total_tokens": used_tokens,
             "sources": sources,
+            "persona_slice": persona_slice or {},
             "metadata": {
                 "platform": platform,
                 "chat_id": chat_id,
@@ -155,6 +157,7 @@ class DynamicContextBuilder:
                 "context_size": len(context_messages),
                 "strategy_hints": hints,
                 "chat_atmosphere": atmosphere,
+                "persona_slice": persona_slice or {},
             },
         }
 

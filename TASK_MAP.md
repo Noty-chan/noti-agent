@@ -167,3 +167,11 @@
 2. Метрики фильтрации и стоимости.
 3. Автообновление памяти/отношений после ответа.
 4. Тестовый контур.
+
+## J. Persona-профиль и внешняя настройка промптов
+- [x] Добавить модель `UserPersonaProfile` и хранение в SQLite по user/chat.
+- [x] Обновлять persona-профиль из диалоговых сигналов (эвристика + LLM extraction с confidence validation).
+- [x] Передавать persona-срез в Dynamic Context Builder и Prompt Construction.
+- [x] Добавить post-check ответа по persona-ограничениям и fallback на консервативный стиль.
+- [x] Логировать persona-метрики (`style_match_score`, `sarcasm_intensity`, `persona_confidence`).
+- [x] Вынести prompt-настройки в внешний конфиг и добавить CLI-терминал редактирования.

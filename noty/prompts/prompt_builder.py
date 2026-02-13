@@ -11,14 +11,35 @@ from .governance import ApprovalDecision, PersonalityProposal, RollbackEvent
 
 
 class ModularPromptBuilder:
-    def __init__(self, prompts_dir: str = "./noty/prompts"):
+    def __init__(self, prompts_dir: str = "./noty/prompts", config_path: str = "./noty/config/persona_prompt_config.json"):
         self.prompts_dir = Path(prompts_dir)
         self.prompts_dir.mkdir(parents=True, exist_ok=True)
         self.versions_dir = self.prompts_dir / "versions"
         self.versions_dir.mkdir(exist_ok=True)
-        self.base_core = self._load_or_create("base_core.txt", self._default_base_core())
-        self.safety_rules = self._load_or_create("safety_rules.txt", self._default_safety())
+        self.config_path = Path(config_path)
+        self.config = self._load_prompt_config()
+        self.base_core = self._load_or_create("base_core.txt", self.config.get("base_core", self._default_base_core()))
+        self.safety_rules = self._load_or_create("safety_rules.txt", self.config.get("safety_rules", self._default_safety()))
         self.personality_layer, self.current_personality_version = self._load_current_personality_with_version()
+
+    def _load_prompt_config(self) -> Dict[str, Any]:
+        default = {
+            "prompt_markers": {"separator": "═══════════════════════════════════════════════════════════"},
+            "base_core": self._default_base_core(),
+            "safety_rules": self._default_safety(),
+            "default_personality": self._default_personality(),
+            "persona_adaptation_policy": {"version": 1, "reason": "initial", "policy_text": "Используй адаптивный стиль по профилю пользователя."},
+            "conservative_fallback": {"preferred_tone": "neutral", "sarcasm_level": 0.1, "response_rate_bias": -0.05},
+        }
+        if self.config_path.exists():
+            loaded = json.loads(self.config_path.read_text(encoding="utf-8"))
+            merged = dict(default)
+            merged.update(loaded)
+            merged["prompt_markers"] = {**default["prompt_markers"], **(loaded.get("prompt_markers") or {})}
+            return merged
+        self.config_path.parent.mkdir(parents=True, exist_ok=True)
+        self.config_path.write_text(json.dumps(default, ensure_ascii=False, indent=2), encoding="utf-8")
+        return default
 
     def _load_or_create(self, filename: str, default_content: str) -> str:
         path = self.prompts_dir / filename
@@ -38,7 +59,7 @@ class ModularPromptBuilder:
                     except ValueError:
                         continue
             return current_text, 1
-        default = self._default_personality()
+        default = self.config.get("default_personality", self._default_personality())
         v1 = self.versions_dir / "personality_v1.txt"
         v1.write_text(default, encoding="utf-8")
         current.write_text(default, encoding="utf-8")
@@ -58,6 +79,16 @@ class ModularPromptBuilder:
             f"- response_rate_bias: {response_rate_bias:+.2f}"
         )
 
+    def _build_persona_adaptation_layer(self, persona_profile: Optional[Dict[str, Any]] = None) -> str:
+        policy = self.config.get("persona_adaptation_policy", {})
+        return (
+            "PERSONA ADAPTATION POLICY:\n"
+            f"- version: {policy.get('version', 1)}\n"
+            f"- reason_for_change: {policy.get('reason', 'initial')}\n"
+            f"- policy: {policy.get('policy_text', '')}\n"
+            f"- active_persona_profile: {json.dumps(persona_profile or {}, ensure_ascii=False)}"
+        )
+
     def build_full_prompt(
         self,
         context: Dict[str, Any],
@@ -65,19 +96,23 @@ class ModularPromptBuilder:
         energy: int = 100,
         user_relationship: Optional[Dict[str, Any]] = None,
         runtime_modifiers: Optional[Dict[str, Any]] = None,
+        persona_profile: Optional[Dict[str, Any]] = None,
     ) -> str:
         personality_layer = self._build_personality_layer(runtime_modifiers)
+        sep = self.config.get("prompt_markers", {}).get("separator", "═══════════════════════════════════════════════════════════")
         return (
             f"{self.base_core}\n\n"
-            "═══════════════════════════════════════════════════════════\n\n"
+            f"{sep}\n\n"
             f"{personality_layer}\n\n"
-            "═══════════════════════════════════════════════════════════\n\n"
+            f"{sep}\n\n"
+            f"{self._build_persona_adaptation_layer(persona_profile)}\n\n"
+            f"{sep}\n\n"
             f"{self._generate_mood_layer(mood, energy)}\n\n"
-            "═══════════════════════════════════════════════════════════\n\n"
+            f"{sep}\n\n"
             f"{self._generate_relationships_layer(user_relationship)}\n\n"
-            "═══════════════════════════════════════════════════════════\n\n"
+            f"{sep}\n\n"
             f"{self._format_context(context)}\n\n"
-            "═══════════════════════════════════════════════════════════\n\n"
+            f"{sep}\n\n"
             f"{self.safety_rules}"
         )
 
@@ -126,13 +161,15 @@ class ModularPromptBuilder:
         formatted_messages = []
         atmosphere = context.get("metadata", {}).get("chat_atmosphere", "unknown")
         global_memory = context.get("global_memory", "")
+        persona_slice = context.get("persona_slice") or context.get("metadata", {}).get("persona_slice") or {}
         for msg in messages[-10:]:
             role = "Пользователь" if msg["role"] == "user" else "Я"
             formatted_messages.append(f"{role}: {msg['content']}")
         global_memory_block = f"\n\nГЛОБАЛЬНАЯ ПАМЯТЬ НОТИ:\n{global_memory}" if global_memory else ""
+        persona_block = f"\n\nPERSONA-СРЕЗ ЧАТА:\n{json.dumps(persona_slice, ensure_ascii=False)}" if persona_slice else ""
         return (
             f"КОНТЕКСТ ДИАЛОГА (атмосфера: {atmosphere}):\n{chr(10).join(formatted_messages)}\n\n{context.get('summary', '')}"
-            f"{global_memory_block}"
+            f"{persona_block}{global_memory_block}"
         )
 
     @staticmethod
@@ -154,17 +191,20 @@ class ModularPromptBuilder:
             "- sarcasm_level: 0.50 (0..1)\n"
             "- response_rate_bias: +0.00"
         )
+        sep = self.config.get("prompt_markers", {}).get("separator", "═══════════════════════════════════════════════════════════")
         prompt = (
             f"{self.base_core}\n\n"
-            "═══════════════════════════════════════════════════════════\n\n"
+            f"{sep}\n\n"
             f"{preview_personality}\n\n"
-            "═══════════════════════════════════════════════════════════\n\n"
+            f"{sep}\n\n"
+            f"{self._build_persona_adaptation_layer({})}\n\n"
+            f"{sep}\n\n"
             f"{self._generate_mood_layer(mood, energy)}\n\n"
-            "═══════════════════════════════════════════════════════════\n\n"
+            f"{sep}\n\n"
             f"{self._generate_relationships_layer(None)}\n\n"
-            "═══════════════════════════════════════════════════════════\n\n"
+            f"{sep}\n\n"
             f"{self._format_context(context)}\n\n"
-            "═══════════════════════════════════════════════════════════\n\n"
+            f"{sep}\n\n"
             f"{self.safety_rules}"
         )
         return {

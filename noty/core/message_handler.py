@@ -66,6 +66,7 @@ class MessageHandler:
         user_relationship: Dict[str, Any] | None = None,
         runtime_modifiers: Dict[str, Any] | None = None,
         strategy_hints: Dict[str, Any] | None = None,
+        persona_profile: Dict[str, Any] | None = None,
     ) -> str:
         with self.metrics.time_block("context_build_seconds", stage="context_build", platform=platform):
             context = self.context_builder.build_context(
@@ -74,6 +75,7 @@ class MessageHandler:
                 user_id=user_id,
                 strategy_hints=strategy_hints,
                 platform=platform,
+                persona_slice=persona_profile or {},
             )
 
         return self.prompt_builder.build_full_prompt(
@@ -82,6 +84,7 @@ class MessageHandler:
             energy=energy,
             user_relationship=user_relationship,
             runtime_modifiers=runtime_modifiers,
+            persona_profile=persona_profile,
         )
 
     def get_filter_stats(self) -> Dict[str, Any]:
