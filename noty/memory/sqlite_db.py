@@ -56,7 +56,10 @@ class SQLiteDBManager:
                 response_text TEXT,
                 mood_before TEXT,
                 mood_after TEXT,
-                tools_used TEXT
+                tools_used TEXT,
+                style_match_score REAL DEFAULT 0.0,
+                sarcasm_intensity REAL DEFAULT 0.0,
+                persona_confidence REAL DEFAULT 0.0
             );
 
             CREATE TABLE IF NOT EXISTS moderation (
@@ -103,6 +106,35 @@ class SQLiteDBManager:
                 PRIMARY KEY (user_id, chat_id)
             );
 
+            CREATE TABLE IF NOT EXISTS user_aliases (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                alias TEXT NOT NULL,
+                normalized_alias TEXT NOT NULL,
+                confidence REAL DEFAULT 0.0,
+                source TEXT DEFAULT 'heuristic',
+                is_verified BOOLEAN DEFAULT FALSE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(chat_id, user_id, normalized_alias)
+            );
+
+            CREATE TABLE IF NOT EXISTS alias_relations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_id INTEGER NOT NULL,
+                reporter_user_id INTEGER NOT NULL,
+                target_display_name TEXT NOT NULL,
+                alias TEXT NOT NULL,
+                normalized_alias TEXT NOT NULL,
+                confidence REAL DEFAULT 0.0,
+                source TEXT DEFAULT 'heuristic_relation',
+                is_verified BOOLEAN DEFAULT FALSE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(chat_id, reporter_user_id, target_display_name, normalized_alias)
+            );
+
             """
         )
         interaction_cols = {row[1] for row in cur.execute("PRAGMA table_info(interactions)").fetchall()}
@@ -114,6 +146,14 @@ class SQLiteDBManager:
         cols = {row[1] for row in cur.execute("PRAGMA table_info(prompt_versions)").fetchall()}
         if "signal_source" not in cols:
             cur.execute("ALTER TABLE prompt_versions ADD COLUMN signal_source TEXT DEFAULT ''")
+
+        interaction_cols = {row[1] for row in cur.execute("PRAGMA table_info(interactions)").fetchall()}
+        if "style_match_score" not in interaction_cols:
+            cur.execute("ALTER TABLE interactions ADD COLUMN style_match_score REAL DEFAULT 0.0")
+        if "sarcasm_intensity" not in interaction_cols:
+            cur.execute("ALTER TABLE interactions ADD COLUMN sarcasm_intensity REAL DEFAULT 0.0")
+        if "persona_confidence" not in interaction_cols:
+            cur.execute("ALTER TABLE interactions ADD COLUMN persona_confidence REAL DEFAULT 0.0")
         conn.commit()
         conn.close()
 
@@ -240,3 +280,107 @@ class SQLiteDBManager:
         )
         conn.commit()
         conn.close()
+
+    def upsert_user_alias(
+        self,
+        *,
+        chat_id: int,
+        user_id: int,
+        alias: str,
+        normalized_alias: str,
+        confidence: float,
+        source: str,
+        is_verified: bool,
+    ) -> None:
+        conn = self._connect()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO user_aliases (chat_id, user_id, alias, normalized_alias, confidence, source, is_verified, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(chat_id, user_id, normalized_alias) DO UPDATE SET
+                alias=excluded.alias,
+                confidence=MAX(user_aliases.confidence, excluded.confidence),
+                source=excluded.source,
+                is_verified=MAX(user_aliases.is_verified, excluded.is_verified),
+                updated_at=CURRENT_TIMESTAMP
+            """,
+            (chat_id, user_id, alias, normalized_alias, float(confidence), source, int(is_verified)),
+        )
+        conn.commit()
+        conn.close()
+
+    def list_user_aliases(self, *, chat_id: int, user_id: int, only_verified: bool = False) -> List[Dict[str, Any]]:
+        conn = self._connect()
+        cur = conn.cursor()
+        query = (
+            "SELECT alias, normalized_alias, confidence, source, is_verified "
+            "FROM user_aliases WHERE chat_id=? AND user_id=?"
+        )
+        params: list[Any] = [chat_id, user_id]
+        if only_verified:
+            query += " AND is_verified=1"
+        query += " ORDER BY is_verified DESC, confidence DESC, id DESC"
+        cur.execute(query, tuple(params))
+        rows = [dict(r) for r in cur.fetchall()]
+        conn.close()
+        return rows
+
+    def upsert_alias_relation(
+        self,
+        *,
+        chat_id: int,
+        reporter_user_id: int,
+        target_display_name: str,
+        alias: str,
+        normalized_alias: str,
+        confidence: float,
+        source: str,
+        is_verified: bool,
+    ) -> None:
+        conn = self._connect()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO alias_relations (
+                chat_id, reporter_user_id, target_display_name, alias,
+                normalized_alias, confidence, source, is_verified, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(chat_id, reporter_user_id, target_display_name, normalized_alias) DO UPDATE SET
+                alias=excluded.alias,
+                confidence=MAX(alias_relations.confidence, excluded.confidence),
+                source=excluded.source,
+                is_verified=MAX(alias_relations.is_verified, excluded.is_verified),
+                updated_at=CURRENT_TIMESTAMP
+            """,
+            (
+                chat_id,
+                reporter_user_id,
+                target_display_name,
+                alias,
+                normalized_alias,
+                float(confidence),
+                source,
+                int(is_verified),
+            ),
+        )
+        conn.commit()
+        conn.close()
+
+    def list_alias_relations(self, *, chat_id: int) -> List[Dict[str, Any]]:
+        conn = self._connect()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT reporter_user_id, target_display_name, alias, normalized_alias,
+                   confidence, source, is_verified
+            FROM alias_relations
+            WHERE chat_id=?
+            ORDER BY is_verified DESC, confidence DESC, id DESC
+            """,
+            (chat_id,),
+        )
+        rows = [dict(r) for r in cur.fetchall()]
+        conn.close()
+        return rows
