@@ -141,6 +141,13 @@ class NotyBot:
             self.logger.info("Сформирована глобальная память: user_id=%s chars=%s", user_id, len(global_memory_summary))
 
             persona_profile = self.persona_manager.update_from_dialogue(user_id=user_id, chat_id=chat_id, text=text) if self.persona_manager else None
+            persona_slice = persona_profile.compact_slice() if persona_profile else {}
+            known_aliases = self.alias_manager.list_aliases(chat_id=chat_id, user_id=user_id) if self.alias_manager else []
+            if known_aliases:
+                persona_slice["known_aliases"] = [x.get("alias") for x in known_aliases[:5]]
+            if preferred_alias:
+                persona_slice["preferred_alias"] = preferred_alias
+
             runtime_modifiers = {
                 "preferred_tone": pre_recommendation.preferred_tone,
                 "sarcasm_level": pre_recommendation.sarcasm_level,
@@ -161,7 +168,7 @@ class NotyBot:
                 user_relationship=relationship,
                 runtime_modifiers=runtime_modifiers,
                 strategy_hints=self._build_strategy_hints(payload),
-                persona_profile=persona_profile.compact_slice() if persona_profile else {},
+                persona_profile=persona_slice,
             )
             if global_memory_summary:
                 prompt = f"{prompt}\n\nGLOBAL_NOTY_MEMORY:\n{global_memory_summary}"
@@ -201,7 +208,7 @@ class NotyBot:
                 chat_id=chat_id,
                 is_private=bool(event_data.get("is_private", False)),
                 user_role=str(event_data.get("user_role", payload.get("user_role", "user"))),
-                persona_profile=persona_profile.compact_slice() if persona_profile else {},
+                persona_profile=persona_slice,
             )
             if alias_result and alias_result.should_ask_confirmation and processing_result.text:
                 processing_result.text = (
@@ -254,6 +261,8 @@ class NotyBot:
                     "style_match_score": processing_result.style_match_score,
                     "sarcasm_intensity": processing_result.sarcasm_intensity,
                     "persona_confidence": processing_result.persona_confidence,
+                    "preferred_alias": preferred_alias,
+                    "alias_relations_detected": len(alias_result.relation_signals) if alias_result else 0,
                 },
             }
             self.interaction_logger.log_outgoing(event_data, result)
