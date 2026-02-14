@@ -54,9 +54,13 @@ class DynamicContextBuilder:
         context_messages: List[Dict[str, Any]] = []
         used_tokens = 0
 
-        sources = {"recent": 0, "semantic": 0, "important": 0, "rolling_recent_days": 0}
-
-        sources = {"notebook": 0, "recent": 0, "semantic": 0, "important": 0}
+        sources = {
+            "notebook": 0,
+            "recent": 0,
+            "semantic": 0,
+            "important": 0,
+            "rolling_recent_days": 0,
+        }
 
         hints = strategy_hints or {}
         notebook_limits = self.db.get_notebook_limits() if hasattr(self.db, "get_notebook_limits") else {}
@@ -251,10 +255,7 @@ class DynamicContextBuilder:
             hints_line = f"\n- Strategy hints: избегать тем {', '.join(hints['avoid_topics'])}"
         return (
             "Контекст диалога:\n"
-
-            f"- Сообщений: {len(messages)} ({sources['recent']} недавних, {sources['semantic']} релевантных, {sources['important']} важных, {sources['rolling_recent_days']} rolling-memory)\n"
-
-            f"- Сообщений: {len(messages)} ({sources['notebook']} notebook, {sources['recent']} недавних, {sources['semantic']} релевантных, {sources['important']} важных)\n"
+            f"- Сообщений: {len(messages)} ({sources['notebook']} notebook, {sources['recent']} недавних, {sources['semantic']} релевантных, {sources['important']} важных, {sources['rolling_recent_days']} rolling-memory)\n"
 
             f"- Период: {time_range[0].strftime('%d.%m %H:%M')} - {time_range[1].strftime('%d.%m %H:%M')}\n"
             f"- Атмосфера чата: {atmosphere}"
