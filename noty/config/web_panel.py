@@ -9,6 +9,7 @@ import secrets
 import subprocess
 import sys
 import threading
+from datetime import datetime
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import NamedTemporaryFile
@@ -73,6 +74,10 @@ ENV_PATH = CONFIG_DIR / ".env"
 BOT_CONFIG_PATH = CONFIG_DIR / "bot_config.yaml"
 PERSONA_CONFIG_PATH = CONFIG_DIR / "persona_prompt_config.json"
 API_KEYS_PATH = CONFIG_DIR / "api_keys.json"
+RUNTIME_LOG_PATH = PROJECT_ROOT / "noty" / "data" / "logs" / "runtime" / "noty-runtime.log"
+INTERACTIONS_LOG_DIR = PROJECT_ROOT / "noty" / "data" / "logs" / "interactions"
+THOUGHTS_LOG_DIR = PROJECT_ROOT / "noty" / "data" / "logs" / "thoughts"
+ACTIONS_LOG_DIR = PROJECT_ROOT / "noty" / "data" / "logs" / "actions"
 
 
 security = HTTPBasic()
@@ -99,6 +104,7 @@ class NotyProcessManager:
 
     def __init__(self) -> None:
         self._process: subprocess.Popen[str] | None = None
+        self._log_handle: Any | None = None
         self._lock = threading.RLock()
 
     def start(self, mode: str | None = None) -> str:
@@ -110,11 +116,16 @@ class NotyProcessManager:
             if mode:
                 cmd.extend(["--mode", mode])
 
+            RUNTIME_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+            self._log_handle = open(RUNTIME_LOG_PATH, "a", encoding="utf-8")
+            self._log_handle.write(f"\n[{datetime.now().isoformat()}] Starting process: {' '.join(cmd)}\n")
+            self._log_handle.flush()
+
             self._process = subprocess.Popen(
                 cmd,
                 cwd=PROJECT_ROOT,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stdout=self._log_handle,
+                stderr=self._log_handle,
                 text=True,
             )
             return "started"
@@ -133,6 +144,11 @@ class NotyProcessManager:
                 self._process.wait(timeout=3)
             finally:
                 self._process = None
+                if self._log_handle:
+                    self._log_handle.write(f"[{datetime.now().isoformat()}] Process stopped\n")
+                    self._log_handle.flush()
+                    self._log_handle.close()
+                    self._log_handle = None
             return "stopped"
 
     def restart(self, mode: str | None = None) -> str:
@@ -155,6 +171,56 @@ class NotyProcessManager:
 
 
 PROCESS_MANAGER = NotyProcessManager()
+
+
+class LocalPanelChatSimulator:
+    """Локальный чат-симулятор для проверки ответов Ноти через web-панель."""
+
+    def __init__(self, history_limit: int = 30) -> None:
+        self._bot: Any | None = None
+        self._lock = threading.RLock()
+        self._history: list[dict[str, str]] = []
+        self._history_limit = history_limit
+
+    def _build_bot(self) -> Any:
+        from main import build_bot, load_yaml
+
+        config = load_yaml(str(PATHS.bot_config_path))
+        return build_bot(config)
+
+    def send(self, user_text: str, chat_id: int, user_id: int, username: str) -> dict[str, Any]:
+        with self._lock:
+            if self._bot is None:
+                self._bot = self._build_bot()
+
+            event = {
+                "platform": "web_panel",
+                "chat_id": chat_id,
+                "user_id": user_id,
+                "text": user_text,
+                "is_private": True,
+                "username": username,
+                "chat_name": f"web_panel_chat_{chat_id}",
+            }
+            result = self._bot.handle_message(event)
+            self._history.append(
+                {
+                    "timestamp": datetime.now().strftime("%H:%M:%S"),
+                    "user": user_text,
+                    "noty": str(result.get("text", "(ответ не сгенерирован)")),
+                    "status": str(result.get("status", "unknown")),
+                }
+            )
+            if len(self._history) > self._history_limit:
+                self._history = self._history[-self._history_limit :]
+            return result
+
+    def history(self) -> list[dict[str, str]]:
+        with self._lock:
+            return list(self._history)
+
+
+CHAT_SIMULATOR = LocalPanelChatSimulator()
 
 
 def _safe_write(path: Path, payload: str) -> None:
@@ -234,6 +300,7 @@ def _compose_view_model() -> dict[str, Any]:
     mem0_enabled = env_data.get("MEM0_ENABLED", "false")
 
     policy = persona_cfg.get("persona_adaptation_policy", {})
+    history = CHAT_SIMULATOR.history()
 
     return {
         "vk_token": transport.get("vk_token", ""),
@@ -251,7 +318,45 @@ def _compose_view_model() -> dict[str, Any]:
         "personality_reason": policy.get("reason", "n/a"),
         "service_status": PROCESS_MANAGER.status(),
         "api_keys_count": len(keys_cfg.get("openrouter_keys", [])),
+        "full_logs": _collect_full_logs(),
+        "chat_history": history,
     }
+
+
+def _read_tail(path: Path, max_lines: int = 400) -> str:
+    if not path.exists():
+        return ""
+    lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    return "\n".join(lines[-max_lines:])
+
+
+def _collect_jsonl_tail(log_dir: Path, max_lines: int = 250) -> str:
+    if not log_dir.exists():
+        return ""
+    files = sorted(log_dir.glob("*.jsonl"))
+    if not files:
+        return ""
+    latest = files[-1]
+    return _read_tail(latest, max_lines=max_lines)
+
+
+def _collect_full_logs() -> str:
+    sections: list[str] = []
+    runtime = _read_tail(RUNTIME_LOG_PATH, max_lines=500)
+    interactions = _collect_jsonl_tail(INTERACTIONS_LOG_DIR)
+    thoughts = _collect_jsonl_tail(THOUGHTS_LOG_DIR)
+    actions = _collect_jsonl_tail(ACTIONS_LOG_DIR)
+
+    if runtime:
+        sections.append(f"=== Runtime log (main.py stdout/stderr) ===\n{runtime}")
+    if interactions:
+        sections.append(f"=== Interactions log ===\n{interactions}")
+    if thoughts:
+        sections.append(f"=== Thoughts log ===\n{thoughts}")
+    if actions:
+        sections.append(f"=== Actions log ===\n{actions}")
+
+    return "\n\n".join(sections) if sections else "Логи пока пустые."
 
 
 def save_runtime_settings(form_data: dict[str, str]) -> None:
@@ -298,6 +403,16 @@ def index(_: str = Depends(_verify_auth)) -> str:
     checked_false = "checked" if vm["mem0_enabled"] != "true" else ""
 
     safe = {key: html.escape(str(value), quote=True) for key, value in vm.items()}
+    chat_rows = "".join(
+        (
+            "<div style='border:1px solid #ddd; padding:8px; margin-bottom:8px;'>"
+            f"<div><b>{html.escape(row['timestamp'])}</b> | status: {html.escape(row['status'])}</div>"
+            f"<div><b>Ты:</b> {html.escape(row['user'])}</div>"
+            f"<div><b>Ноти:</b> {html.escape(row['noty'])}</div>"
+            "</div>"
+        )
+        for row in vm["chat_history"]
+    )
 
     return f"""
     <html>
@@ -338,6 +453,22 @@ def index(_: str = Depends(_verify_auth)) -> str:
       <form method='post' action='/service/stop' style='display:inline-block'><button>Остановить Noti</button></form>
       <form method='post' action='/service/reload' style='display:inline-block'><button>Перезагрузить Noti</button></form>
       <form method='get' action='/' style='display:inline-block'><button>Статус сервиса</button></form>
+
+      <hr>
+      <h2>Чат с Ноти (симуляция отдельного ЛС)</h2>
+      <form method='post' action='/chat/send'>
+        <label>Chat ID<br><input name='chat_id' style='width:100%' value='9001'></label><br><br>
+        <label>User ID<br><input name='user_id' style='width:100%' value='1001'></label><br><br>
+        <label>Username<br><input name='username' style='width:100%' value='web_user'></label><br><br>
+        <label>Сообщение Ноти<br><textarea name='message_text' rows='4' style='width:100%'></textarea></label><br><br>
+        <button type='submit'>Отправить сообщение Ноти</button>
+      </form>
+      <div style='margin-top:12px'>{chat_rows or '<i>Диалог пока пуст.</i>'}</div>
+
+      <hr>
+      <h2>Полный лог (runtime + interactions + thoughts + actions)</h2>
+      <form method='get' action='/' style='display:inline-block'><button>Обновить лог</button></form>
+      <pre style='white-space: pre-wrap; background:#111; color:#ddd; padding:12px; border-radius:8px; max-height:600px; overflow:auto;'>{safe['full_logs']}</pre>
     </body>
     </html>
     """
@@ -398,4 +529,23 @@ def service_stop(request: Request, _: str = Depends(_verify_auth)) -> RedirectRe
 def service_reload(request: Request, _: str = Depends(_verify_auth)) -> RedirectResponse:
     mode = _load_yaml(PATHS.bot_config_path).get("transport", {}).get("mode")
     PROCESS_MANAGER.restart(mode=mode)
+    return RedirectResponse(url=str(request.url_for("index")), status_code=303)
+
+
+@app.post("/chat/send")
+def chat_send(
+    request: Request,
+    message_text: str = Form(""),
+    chat_id: str = Form("9001"),
+    user_id: str = Form("1001"),
+    username: str = Form("web_user"),
+    _: str = Depends(_verify_auth),
+) -> RedirectResponse:
+    if message_text.strip():
+        CHAT_SIMULATOR.send(
+            user_text=message_text.strip(),
+            chat_id=int(chat_id or 9001),
+            user_id=int(user_id or 1001),
+            username=username.strip() or "web_user",
+        )
     return RedirectResponse(url=str(request.url_for("index")), status_code=303)
