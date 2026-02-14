@@ -19,6 +19,7 @@ from noty.filters.heuristic_filter import HeuristicFilter
 from noty.memory.semantic_retriever import LlamaSemanticRetriever
 from noty.memory.notebook import NotiNotebookManager
 from noty.memory.sqlite_db import SQLiteDBManager
+from noty.memory.recent_days_memory import RecentDaysMemory
 from noty.mood.mood_manager import MoodManager
 from noty.prompts.prompt_builder import ModularPromptBuilder
 from noty.thought.monologue import InternalMonologue, ThoughtLogger
@@ -29,6 +30,7 @@ from noty.transport.vk.polling import VKLongPollTransport
 from noty.transport.vk.state_store import VKStateStore
 from noty.transport.vk.webhook import VKWebhookHandler
 from noty.utils.logger import configure_logging
+from noty.utils.metrics import MetricsCollector
 
 
 def load_yaml(path: str) -> Dict[str, Any]:
@@ -44,11 +46,15 @@ def build_bot(config: Dict[str, Any]) -> NotyBot:
     db_manager = SQLiteDBManager()
     embedding_filter = EmbeddingFilter()
     semantic_retriever = LlamaSemanticRetriever()
+    metrics = MetricsCollector()
+    recent_days_memory = RecentDaysMemory(db_manager=db_manager)
     context_builder = DynamicContextBuilder(
         db_manager=db_manager,
         embedding_filter=embedding_filter,
         max_tokens=config["bot"].get("max_context_tokens", 3000),
         semantic_retriever=semantic_retriever,
+        recent_days_memory=recent_days_memory,
+        metrics=metrics,
     )
     prompt_builder = ModularPromptBuilder()
     message_handler = MessageHandler(
@@ -56,6 +62,7 @@ def build_bot(config: Dict[str, Any]) -> NotyBot:
         prompt_builder=prompt_builder,
         heuristic_filter=HeuristicFilter(pass_probability=config["bot"].get("react_target_rate", 0.2)),
         embedding_filter=embedding_filter,
+        metrics=metrics,
     )
     mood_manager = MoodManager()
     tool_executor = SafeToolExecutor(owner_id=config["transport"].get("owner_id", 0))
@@ -75,6 +82,7 @@ def build_bot(config: Dict[str, Any]) -> NotyBot:
         monologue=monologue,
         db_manager=db_manager,
         interaction_logger=InteractionJSONLLogger(),
+        metrics=metrics,
     )
 
 
