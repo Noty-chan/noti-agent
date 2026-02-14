@@ -9,6 +9,8 @@ from typing import Any, Dict, List
 import numpy as np
 
 from noty.filters.embedding_filter import EmbeddingFilter
+from noty.memory.recent_days_memory import RecentDaysMemory
+from noty.utils.metrics import MetricsCollector
 
 
 class DynamicContextBuilder:
@@ -18,11 +20,15 @@ class DynamicContextBuilder:
         embedding_filter: EmbeddingFilter,
         max_tokens: int = 3000,
         semantic_retriever: Any | None = None,
+        recent_days_memory: RecentDaysMemory | None = None,
+        metrics: MetricsCollector | None = None,
     ):
         self.db = db_manager
         self.embedder = embedding_filter
         self.max_tokens = max_tokens
         self.semantic_retriever = semantic_retriever
+        self.recent_days_memory = recent_days_memory
+        self.metrics = metrics
         self.logger = logging.getLogger(__name__)
 
     @staticmethod
@@ -47,8 +53,19 @@ class DynamicContextBuilder:
     ) -> Dict[str, Any]:
         context_messages: List[Dict[str, Any]] = []
         used_tokens = 0
-        sources = {"recent": 0, "semantic": 0, "important": 0}
+        sources = {"recent": 0, "semantic": 0, "important": 0, "rolling_recent_days": 0}
         hints = strategy_hints or {}
+
+        if self.recent_days_memory:
+            self.recent_days_memory.remember_message(
+                platform=platform,
+                chat_id=chat_id,
+                user_id=user_id,
+                text=current_message,
+            )
+            maintenance_executed = self.recent_days_memory.run_maintenance_if_due()
+            if maintenance_executed:
+                self.logger.info("Rolling memory maintenance выполнен: platform=%s chat_id=%s", platform, chat_id)
 
         recent_messages = self._db_call(self.db.get_recent_messages, platform, chat_id, limit=5)
         for msg in recent_messages:
@@ -111,6 +128,26 @@ class DynamicContextBuilder:
                 used_tokens += msg_tokens
                 sources["important"] += 1
 
+        if self.recent_days_memory:
+            rolling_facts = self.recent_days_memory.get_context_facts(platform=platform, chat_id=chat_id, limit=4)
+            for fact in rolling_facts:
+                if any(m["content"] == fact["text"] for m in context_messages):
+                    continue
+                fact_tokens = self._estimate_tokens(fact["text"])
+                if used_tokens + fact_tokens > self.max_tokens:
+                    continue
+                context_messages.append(
+                    {
+                        "role": "assistant",
+                        "content": fact["text"],
+                        "timestamp": fact["created_at"],
+                        "source": "rolling_recent_days",
+                        "weight": round(float(fact["weight"]), 4),
+                    }
+                )
+                used_tokens += fact_tokens
+                sources["rolling_recent_days"] += 1
+
         conflict_topics = [t.lower() for t in hints.get("avoid_topics", [])]
         if conflict_topics:
             context_messages = [m for m in context_messages if not any(topic in m["content"].lower() for topic in conflict_topics)]
@@ -137,12 +174,17 @@ class DynamicContextBuilder:
         context_messages.sort(key=lambda x: x["timestamp"])
         atmosphere = self._estimate_chat_atmosphere(context_messages)
         summary = self._create_summary(context_messages, sources, hints, atmosphere)
+        facts_total = sum(sources.values())
+        rolling_share = (sources["rolling_recent_days"] / facts_total) if facts_total else 0.0
+        if self.metrics:
+            self.metrics.inc("rolling_memory_context_facts", value=sources["rolling_recent_days"], scope=f"{platform}:{chat_id}")
         self.logger.info(
-            "Контекст собран: platform=%s chat_id=%s messages=%s atmosphere=%s",
+            "Контекст собран: platform=%s chat_id=%s messages=%s atmosphere=%s rolling_share=%.3f",
             platform,
             chat_id,
             len(context_messages),
             atmosphere,
+            rolling_share,
         )
         return {
             "messages": [{"role": m["role"], "content": m["content"]} for m in context_messages],
@@ -157,6 +199,7 @@ class DynamicContextBuilder:
                 "context_size": len(context_messages),
                 "strategy_hints": hints,
                 "chat_atmosphere": atmosphere,
+                "rolling_memory_share": round(rolling_share, 4),
                 "persona_slice": persona_slice or {},
             },
         }
@@ -186,7 +229,7 @@ class DynamicContextBuilder:
             hints_line = f"\n- Strategy hints: избегать тем {', '.join(hints['avoid_topics'])}"
         return (
             "Контекст диалога:\n"
-            f"- Сообщений: {len(messages)} ({sources['recent']} недавних, {sources['semantic']} релевантных, {sources['important']} важных)\n"
+            f"- Сообщений: {len(messages)} ({sources['recent']} недавних, {sources['semantic']} релевантных, {sources['important']} важных, {sources['rolling_recent_days']} rolling-memory)\n"
             f"- Период: {time_range[0].strftime('%d.%m %H:%M')} - {time_range[1].strftime('%d.%m %H:%M')}\n"
             f"- Атмосфера чата: {atmosphere}"
             f"{hints_line}"
