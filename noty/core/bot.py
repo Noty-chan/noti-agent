@@ -215,6 +215,13 @@ class NotyBot:
                     f"{processing_result.text}\n\n"
                     "Кстати, уточню: правильно ли я поняла, что это подтверждённая кличка?"
                 )
+            if alias_result and alias_result.rejected_aliases and processing_result.text:
+                rejected = ", ".join(item.get("alias", "") for item in alias_result.rejected_aliases[:2] if item.get("alias"))
+                if rejected:
+                    processing_result.text = (
+                        f"{processing_result.text}\n\n"
+                        f"Нет, так звать тебя не буду ({rejected}). Выбери нормальное имя, и я запомню."
+                    )
             self._apply_tool_post_processing(processing_result.tool_results)
 
             mood_after = self.mood_manager.get_current_state()
@@ -263,6 +270,7 @@ class NotyBot:
                     "persona_confidence": processing_result.persona_confidence,
                     "preferred_alias": preferred_alias,
                     "alias_relations_detected": len(alias_result.relation_signals) if alias_result else 0,
+                    "alias_rejected_count": len(alias_result.rejected_aliases) if alias_result else 0,
                 },
             }
             self.interaction_logger.log_outgoing(event_data, result)

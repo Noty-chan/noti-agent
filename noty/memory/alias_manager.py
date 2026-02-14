@@ -12,12 +12,24 @@ class AliasExtractionResult:
     aliases: List[Dict[str, Any]]
     should_ask_confirmation: bool
     relation_signals: List[Dict[str, Any]] = field(default_factory=list)
+    rejected_aliases: List[Dict[str, Any]] = field(default_factory=list)
 
 
 class UserAliasManager:
     def __init__(self, db_manager: Any, min_confidence: float = 0.5):
         self.db = db_manager
         self.min_confidence = min_confidence
+        self.rejected_roots = {
+            "господин",
+            "повелитель",
+            "хозяин",
+            "boss",
+            "master",
+            "lord",
+            "король",
+            "царь",
+            "император",
+        }
 
     @staticmethod
     def _normalize(alias: str) -> str:
@@ -32,8 +44,16 @@ class UserAliasManager:
                 matches.append(value.strip())
         return matches
 
+    def _is_alias_allowed(self, normalized_alias: str) -> bool:
+        if not normalized_alias:
+            return False
+        if normalized_alias in self.rejected_roots:
+            return False
+        return not any(normalized_alias.startswith(f"{root}-") for root in self.rejected_roots)
+
     def extract_alias_signals(self, text: str, user_id: int | None = None) -> AliasExtractionResult:
         aliases: List[Dict[str, Any]] = []
+        rejected_aliases: List[Dict[str, Any]] = []
 
         direct_patterns = [
             r"зов[иу] меня\s+([\wа-яА-ЯёЁ-]{2,32})",
@@ -45,6 +65,16 @@ class UserAliasManager:
             for candidate in self._extract_fragment(text, pattern):
                 normalized = self._normalize(candidate)
                 if len(normalized) < 2:
+                    continue
+                if not self._is_alias_allowed(normalized):
+                    rejected_aliases.append(
+                        {
+                            "user_id": user_id,
+                            "alias": candidate,
+                            "normalized_alias": normalized,
+                            "reason": "dominance_title",
+                        }
+                    )
                     continue
                 aliases.append(
                     {
@@ -68,7 +98,7 @@ class UserAliasManager:
                 target_name = (found.group(1) or "").strip()
                 alias = (found.group(2) or "").strip()
                 normalized = self._normalize(alias)
-                if len(normalized) < 2:
+                if len(normalized) < 2 or not self._is_alias_allowed(normalized):
                     continue
                 relation_signals.append(
                     {
@@ -99,6 +129,7 @@ class UserAliasManager:
             aliases=list(dedup.values()),
             should_ask_confirmation=should_ask,
             relation_signals=relation_signals,
+            rejected_aliases=rejected_aliases,
         )
 
     def persist_aliases(self, chat_id: int, user_id: int, aliases: List[Dict[str, Any]]) -> None:
