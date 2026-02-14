@@ -9,8 +9,6 @@ import sys
 from pathlib import Path
 from typing import Any
 
-import yaml
-
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 CONFIG_DIR = PROJECT_ROOT / "noty" / "config"
@@ -30,6 +28,13 @@ def _in_venv() -> bool:
 
 
 def _load_yaml(path: Path) -> dict[str, Any]:
+    try:
+        import yaml
+    except ImportError as exc:
+        raise RuntimeError(
+            "PyYAML не установлен. Выполни 'python -m noty.cli setup' или 'pip install -r requirements.txt'."
+        ) from exc
+
     with path.open("r", encoding="utf-8") as fh:
         return yaml.safe_load(fh) or {}
 
@@ -48,7 +53,8 @@ def setup_command(install_deps: bool = True) -> int:
     if not py_ok:
         return 1
 
-    _print_status("Virtualenv", _in_venv(), "venv активирован" if _in_venv() else "venv не активирован")
+    in_venv = _in_venv()
+    _print_status("Virtualenv", in_venv, "venv активирован" if in_venv else "venv не активирован")
 
     if not ENV_TEMPLATE_PATH.exists():
         _print_status("ENV template", False, f"не найден: {ENV_TEMPLATE_PATH}")
@@ -114,7 +120,11 @@ def run_command(mode: str | None = None) -> int:
         _print_status("Config", False, f"не найден: {BOT_CONFIG_PATH}")
         return 1
 
-    config = _load_yaml(BOT_CONFIG_PATH)
+    try:
+        config = _load_yaml(BOT_CONFIG_PATH)
+    except RuntimeError as exc:
+        _print_status("Config parse", False, str(exc))
+        return 1
     _health_status(config)
 
     cmd = [sys.executable, "main.py"]
