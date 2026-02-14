@@ -125,6 +125,23 @@ def run_command(mode: str | None = None) -> int:
     return subprocess.run(cmd, cwd=PROJECT_ROOT, check=False).returncode
 
 
+def panel_command(host: str = "127.0.0.1", port: int = 8765) -> int:
+    try:
+        import uvicorn
+        from noty.config import web_panel
+    except ImportError:
+        _print_status("Web panel", False, "uvicorn/fastapi не установлены. Установи зависимости: pip install -r requirements.txt")
+        return 1
+
+    if not getattr(web_panel, "FASTAPI_AVAILABLE", False):
+        _print_status("Web panel", False, "fastapi не установлена в окружении")
+        return 1
+
+    print(f"== Запуск web-панели Noty: http://{host}:{port} ==")
+    uvicorn.run("noty.config.web_panel:app", host=host, port=port, reload=False)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Noty local CLI")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -134,6 +151,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     run_parser = subparsers.add_parser("run", help="локальный запуск Noty")
     run_parser.add_argument("--mode", choices=["vk_longpoll", "vk_webhook", "dry_run"], default=None)
+
+    panel_parser = subparsers.add_parser("panel", help="запуск localhost web-панели конфигурации")
+    panel_parser.add_argument("--host", default="127.0.0.1")
+    panel_parser.add_argument("--port", type=int, default=8765)
 
     return parser
 
@@ -148,6 +169,10 @@ def main() -> None:
 
     if args.command == "run":
         code = run_command(mode=args.mode)
+        raise SystemExit(code)
+
+    if args.command == "panel":
+        code = panel_command(host=args.host, port=args.port)
         raise SystemExit(code)
 
 
