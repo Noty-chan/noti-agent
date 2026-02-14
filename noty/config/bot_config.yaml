@@ -13,7 +13,6 @@ transport:
 
   active_platforms:
     - vk
-    - telegram
   telegram:
     mode: polling
     bot_token: ""

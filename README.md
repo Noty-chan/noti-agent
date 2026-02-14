@@ -2,16 +2,27 @@
 
 Репозиторий приведён к модульной структуре `noty/` согласно `noty_specification.md`.
 
-## Быстрый старт
-1. Заполнить `noty/config/.env` и `noty/config/api_keys.json`.
-2. Установить зависимости:
+## Quick Start (без Docker)
+1. Подготовить окружение (Windows/Linux):
+   - Windows (PowerShell):
+     ```powershell
+     ./scripts/setup.ps1
+     ```
+   - Linux/macOS:
+     ```bash
+     ./scripts/setup.sh
+     ```
+   - или напрямую:
+     ```bash
+     python -m noty.cli setup
+     ```
+2. При необходимости заполнить `noty/config/.env`, `noty/config/bot_config.yaml` и `noty/config/api_keys.json`.
+3. Запустить локально:
    ```bash
-   pip install -r requirements.txt
+   python -m noty.cli run
    ```
-3. Запустить:
-   ```bash
-   python main.py
-   ```
+
+> Telegram не обязателен для first-run профиля: по умолчанию активна только платформа VK.
 
 ## Структура
 См. `noty/README.md` и `TASK_MAP.md`.
