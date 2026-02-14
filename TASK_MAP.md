@@ -175,3 +175,7 @@
 - [x] Добавить post-check ответа по persona-ограничениям и fallback на консервативный стиль.
 - [x] Логировать persona-метрики (`style_match_score`, `sarcasm_intensity`, `persona_confidence`).
 - [x] Вынести prompt-настройки в внешний конфиг и добавить CLI-терминал редактирования.
+
+## K. Bugfix-итерация (стабилизация transport)
+- [x] Исправить обработку Telegram `id=0/update_id=0` без ложного fallback на `unknown`.
+

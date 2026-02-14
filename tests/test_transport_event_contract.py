@@ -58,6 +58,24 @@ def test_telegram_mapping_contract_fields():
     assert payload["is_private"] is False
 
 
+def test_telegram_mapping_keeps_zero_identifiers():
+    tg_update = {
+        "update_id": 0,
+        "message": {
+            "message_id": 0,
+            "text": "zero ids",
+            "from": {"id": 0, "username": "zero"},
+            "chat": {"id": 0, "type": "private"},
+        },
+    }
+
+    event = map_telegram_update(tg_update)
+
+    assert event.chat_id == 0
+    assert event.user_id == 0
+    assert event.raw_event_id == "0"
+
+
 def test_routing_key_is_stable_and_contains_scope_fields():
     event = map_vk_event({
         "type": "message_new",
