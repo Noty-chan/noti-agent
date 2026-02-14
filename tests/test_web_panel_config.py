@@ -65,3 +65,51 @@ def test_get_panel_password_from_env(tmp_path: Path, monkeypatch):
     )
 
     assert web_panel._get_panel_password() == "super-pass"
+
+
+def test_collect_full_logs_combines_sections(tmp_path: Path, monkeypatch):
+    runtime_log = tmp_path / "runtime.log"
+    interactions_dir = tmp_path / "interactions"
+    thoughts_dir = tmp_path / "thoughts"
+    actions_dir = tmp_path / "actions"
+    interactions_dir.mkdir()
+    thoughts_dir.mkdir()
+    actions_dir.mkdir()
+
+    runtime_log.write_text("runtime-line", encoding="utf-8")
+    (interactions_dir / "2026-01-01.jsonl").write_text('{"direction":"incoming"}\n', encoding="utf-8")
+    (thoughts_dir / "2026-01-01.jsonl").write_text('{"thought":"x"}\n', encoding="utf-8")
+    (actions_dir / "2026-01-01.jsonl").write_text('{"action":"ban"}\n', encoding="utf-8")
+
+    monkeypatch.setattr(web_panel, "RUNTIME_LOG_PATH", runtime_log)
+    monkeypatch.setattr(web_panel, "INTERACTIONS_LOG_DIR", interactions_dir)
+    monkeypatch.setattr(web_panel, "THOUGHTS_LOG_DIR", thoughts_dir)
+    monkeypatch.setattr(web_panel, "ACTIONS_LOG_DIR", actions_dir)
+
+    aggregated = web_panel._collect_full_logs()
+    assert "Runtime log" in aggregated
+    assert "Interactions log" in aggregated
+    assert "Thoughts log" in aggregated
+    assert "Actions log" in aggregated
+
+
+def test_chat_simulator_send_stores_history(monkeypatch):
+    class DummyBot:
+        def handle_message(self, event):
+            return {"status": "responded", "text": f"echo:{event['text']}"}
+
+    simulator = web_panel.LocalPanelChatSimulator(history_limit=2)
+    monkeypatch.setattr(simulator, "_build_bot", lambda: DummyBot())
+
+    result1 = simulator.send("привет", chat_id=1, user_id=2, username="u")
+    result2 = simulator.send("еще", chat_id=1, user_id=2, username="u")
+    result3 = simulator.send("третье", chat_id=1, user_id=2, username="u")
+
+    assert result1["status"] == "responded"
+    assert result2["text"] == "echo:еще"
+    assert result3["text"] == "echo:третье"
+
+    history = simulator.history()
+    assert len(history) == 2
+    assert history[0]["user"] == "еще"
+    assert history[1]["noty"] == "echo:третье"
