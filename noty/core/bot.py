@@ -13,6 +13,7 @@ from noty.core.message_handler import MessageHandler
 from noty.core.response_processor import ResponseProcessor
 from noty.memory.mem0_wrapper import Mem0Wrapper
 from noty.memory.relationship_manager import RelationshipManager
+from noty.memory.alias_manager import UserAliasManager
 from noty.memory.persona_profile import PersonaProfileManager
 from noty.memory.session_state import SessionStateStore
 from noty.memory.sqlite_db import SQLiteDBManager
@@ -40,6 +41,7 @@ class NotyBot:
         adaptation_engine: AdaptationEngine | None = None,
         response_processor: ResponseProcessor | None = None,
         persona_manager: PersonaProfileManager | None = None,
+        alias_manager: UserAliasManager | None = None,
     ):
         self.api_rotator = api_rotator
         self.message_handler = message_handler
@@ -55,6 +57,7 @@ class NotyBot:
         self.adaptation_engine = adaptation_engine or AdaptationEngine()
         self.response_processor = response_processor or ResponseProcessor(tool_executor=self.tool_executor)
         self.persona_manager = persona_manager or (PersonaProfileManager(db_manager=self.db_manager) if self.db_manager else None)
+        self.alias_manager = alias_manager or (UserAliasManager(db_manager=self.db_manager) if self.db_manager else None)
         self.logger = logging.getLogger(__name__)
 
     def handle_message(self, event: Mapping[str, Any]) -> Dict[str, Any]:
@@ -79,6 +82,12 @@ class NotyBot:
         relationship = payload.get("relationship")
         if not relationship and self.relationship_manager:
             relationship = self.relationship_manager.get_relationship(user_id)
+
+        alias_result = self.alias_manager.extract_and_persist(chat_id=chat_id, user_id=user_id, text=text) if self.alias_manager else None
+        preferred_alias = self.alias_manager.get_preferred_alias(chat_id=chat_id, user_id=user_id) if self.alias_manager else None
+        if preferred_alias:
+            relationship = dict(relationship or {})
+            relationship["name"] = preferred_alias
 
         if self._should_refuse_private_chat(event_data, relationship):
             self.logger.info("ЛС отклонен по интересу: user_id=%s scope=%s", user_id, scope)
@@ -194,6 +203,11 @@ class NotyBot:
                 user_role=str(event_data.get("user_role", payload.get("user_role", "user"))),
                 persona_profile=persona_profile.compact_slice() if persona_profile else {},
             )
+            if alias_result and alias_result.should_ask_confirmation and processing_result.text:
+                processing_result.text = (
+                    f"{processing_result.text}\n\n"
+                    "Кстати, уточню: правильно ли я поняла, что это подтверждённая кличка?"
+                )
             self._apply_tool_post_processing(processing_result.tool_results)
 
             mood_after = self.mood_manager.get_current_state()
@@ -205,6 +219,9 @@ class NotyBot:
                 mood_before=mood_state["mood"],
                 mood_after=mood_after["mood"],
                 tools_used=processing_result.tools_used,
+                style_match_score=processing_result.style_match_score,
+                sarcasm_intensity=processing_result.sarcasm_intensity,
+                persona_confidence=processing_result.persona_confidence,
             )
 
             outcome = payload.get("interaction_outcome", processing_result.outcome)
@@ -268,6 +285,9 @@ class NotyBot:
         mood_before: str = "neutral",
         mood_after: str = "neutral",
         tools_used: list[str] | None = None,
+        style_match_score: float = 0.0,
+        sarcasm_intensity: float = 0.0,
+        persona_confidence: float = 0.0,
     ) -> None:
         if not self.db_manager:
             return
@@ -275,8 +295,12 @@ class NotyBot:
         cur = conn.cursor()
         cur.execute(
             """
-            INSERT INTO interactions (timestamp, platform, chat_id, user_id, message_text, noty_responded, response_text, mood_before, mood_after, tools_used)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO interactions (
+                timestamp, platform, chat_id, user_id, message_text, noty_responded,
+                response_text, mood_before, mood_after, tools_used,
+                style_match_score, sarcasm_intensity, persona_confidence
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 datetime.now().isoformat(),
@@ -289,6 +313,9 @@ class NotyBot:
                 mood_before,
                 mood_after,
                 ",".join(tools_used or []),
+                float(style_match_score),
+                float(sarcasm_intensity),
+                float(persona_confidence),
             ),
         )
         conn.commit()

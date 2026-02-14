@@ -33,6 +33,22 @@ class UserPersonaProfile:
 class PersonaProfileManager:
     """Обновляет persona-профиль комбинацией эвристик и LLM extraction."""
 
+    @staticmethod
+    def _validate_style(value: Any) -> str | None:
+        if value is None:
+            return None
+        allowed = {"balanced", "supportive", "sarcastic", "neutral"}
+        val = str(value).strip().lower()
+        return val if val in allowed else None
+
+    @staticmethod
+    def _validate_depth(value: Any) -> str | None:
+        if value is None:
+            return None
+        allowed = {"short", "medium", "deep"}
+        val = str(value).strip().lower()
+        return val if val in allowed else None
+
     def __init__(
         self,
         db_manager: Any,
@@ -112,11 +128,11 @@ class PersonaProfileManager:
         taboo_topics = payload.get("taboo_topics", [])
         motivators = payload.get("motivators", [])
         return {
-            "preferred_style": payload.get("preferred_style"),
+            "preferred_style": self._validate_style(payload.get("preferred_style")),
             "sarcasm_tolerance": payload.get("sarcasm_tolerance"),
             "taboo_topics": [str(x).strip() for x in taboo_topics if str(x).strip()],
             "motivators": [str(x).strip() for x in motivators if str(x).strip()],
-            "response_depth_preference": payload.get("response_depth_preference"),
+            "response_depth_preference": self._validate_depth(payload.get("response_depth_preference")),
             "confidence": confidence,
             "source": "llm",
         }

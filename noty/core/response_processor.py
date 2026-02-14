@@ -155,6 +155,10 @@ class ResponseProcessor:
         sarcasm_tolerance = float(persona_profile.get("sarcasm_tolerance", 0.5))
         confidence = float(persona_profile.get("confidence", 0.0))
 
+        if confidence < 0.4:
+            depth_pref = "medium"
+            sarcasm_tolerance = min(sarcasm_tolerance, 0.35)
+
         sarcasm_intensity = min(1.0, sum(lowered.count(marker) for marker in ("ну конечно", "ага", "супер")) / 3)
         too_sharp = sarcasm_intensity > sarcasm_tolerance
 
@@ -171,6 +175,8 @@ class ResponseProcessor:
 
         if too_sharp:
             text = text.replace("Ну конечно", "Понимаю").replace("ага", "хорошо")
+        if confidence < 0.4:
+            text = text.replace("!", ".")
 
         style_match = 1.0
         if too_sharp:
