@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import socket
 import subprocess
 import sys
 from pathlib import Path
@@ -132,10 +133,17 @@ def run_command(mode: str | None = None) -> int:
         cmd.extend(["--mode", mode])
 
     print("== Запуск Noty ==")
+    print("Подсказка: команда `run` запускает только бот-процесс. Web-панель запускается отдельно через `python -m noty.cli panel`.")
     return subprocess.run(cmd, cwd=PROJECT_ROOT, check=False).returncode
 
 
-def panel_command(host: str = "127.0.0.1", port: int = 8765) -> int:
+def _is_port_busy(host: str, port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(0.3)
+        return sock.connect_ex((host, port)) == 0
+
+
+def panel_command(host: str = "127.0.0.1", port: int = 8765, reload_enabled: bool = False) -> int:
     try:
         import uvicorn
         from noty.config import web_panel
@@ -147,8 +155,19 @@ def panel_command(host: str = "127.0.0.1", port: int = 8765) -> int:
         _print_status("Web panel", False, "fastapi не установлена в окружении")
         return 1
 
+    if _is_port_busy(host, port):
+        _print_status(
+            "Web panel",
+            False,
+            (
+                f"порт {host}:{port} уже занят. Останови предыдущий процесс панели "
+                "или запусти с другим портом: python -m noty.cli panel --port 8766"
+            ),
+        )
+        return 1
+
     print(f"== Запуск web-панели Noty: http://{host}:{port} ==")
-    uvicorn.run("noty.config.web_panel:app", host=host, port=port, reload=False)
+    uvicorn.run("noty.config.web_panel:app", host=host, port=port, reload=reload_enabled)
     return 0
 
 
@@ -165,6 +184,11 @@ def build_parser() -> argparse.ArgumentParser:
     panel_parser = subparsers.add_parser("panel", help="запуск localhost web-панели конфигурации")
     panel_parser.add_argument("--host", default="127.0.0.1")
     panel_parser.add_argument("--port", type=int, default=8765)
+    panel_parser.add_argument(
+        "--reload",
+        action="store_true",
+        help="автоперезагрузка web-панели при изменении исходников (режим разработки)",
+    )
 
     return parser
 
@@ -182,7 +206,7 @@ def main() -> None:
         raise SystemExit(code)
 
     if args.command == "panel":
-        code = panel_command(host=args.host, port=args.port)
+        code = panel_command(host=args.host, port=args.port, reload_enabled=args.reload)
         raise SystemExit(code)
 
 
