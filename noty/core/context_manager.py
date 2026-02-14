@@ -47,8 +47,25 @@ class DynamicContextBuilder:
     ) -> Dict[str, Any]:
         context_messages: List[Dict[str, Any]] = []
         used_tokens = 0
-        sources = {"recent": 0, "semantic": 0, "important": 0}
+        sources = {"notebook": 0, "recent": 0, "semantic": 0, "important": 0}
         hints = strategy_hints or {}
+        notebook_limits = self.db.get_notebook_limits() if hasattr(self.db, "get_notebook_limits") else {}
+
+        notebook_notes = self._db_call(getattr(self.db, "get_notebook_notes"), platform, chat_id, limit=5) if hasattr(self.db, "get_notebook_notes") else []
+        for note in notebook_notes:
+            note_text = f"[NOTE#{note['id']}] {note['note']}"
+            note_tokens = self._estimate_tokens(note_text)
+            if used_tokens + note_tokens <= self.max_tokens:
+                context_messages.append(
+                    {
+                        "role": "assistant",
+                        "content": note_text,
+                        "timestamp": note["updated_at"],
+                        "source": "notebook",
+                    }
+                )
+                used_tokens += note_tokens
+                sources["notebook"] += 1
 
         recent_messages = self._db_call(self.db.get_recent_messages, platform, chat_id, limit=5)
         for msg in recent_messages:
@@ -158,6 +175,7 @@ class DynamicContextBuilder:
                 "strategy_hints": hints,
                 "chat_atmosphere": atmosphere,
                 "persona_slice": persona_slice or {},
+                "notebook_limits": notebook_limits,
             },
         }
 
@@ -186,7 +204,7 @@ class DynamicContextBuilder:
             hints_line = f"\n- Strategy hints: избегать тем {', '.join(hints['avoid_topics'])}"
         return (
             "Контекст диалога:\n"
-            f"- Сообщений: {len(messages)} ({sources['recent']} недавних, {sources['semantic']} релевантных, {sources['important']} важных)\n"
+            f"- Сообщений: {len(messages)} ({sources['notebook']} notebook, {sources['recent']} недавних, {sources['semantic']} релевантных, {sources['important']} важных)\n"
             f"- Период: {time_range[0].strftime('%d.%m %H:%M')} - {time_range[1].strftime('%d.%m %H:%M')}\n"
             f"- Атмосфера чата: {atmosphere}"
             f"{hints_line}"
