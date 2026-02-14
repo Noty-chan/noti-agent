@@ -107,6 +107,8 @@ class ModularPromptBuilder:
             f"{sep}\n\n"
             f"{self._build_persona_adaptation_layer(persona_profile)}\n\n"
             f"{sep}\n\n"
+            f"{self._build_notebook_limits_layer(context)}\n\n"
+            f"{sep}\n\n"
             f"{self._generate_mood_layer(mood, energy)}\n\n"
             f"{sep}\n\n"
             f"{self._generate_relationships_layer(user_relationship)}\n\n"
@@ -151,6 +153,20 @@ class ModularPromptBuilder:
             f"Отношение ({score}/10): {attitude}\n"
             f"Предпочитаемый тон: {user_rel.get('preferred_tone', 'средний сарказм')}\n\n"
             f"Что помню:\n{memories_text}"
+        )
+
+    @staticmethod
+    def _build_notebook_limits_layer(context: Dict[str, Any]) -> str:
+        metadata = context.get("metadata", {})
+        limits = metadata.get("notebook_limits") or {}
+        if not limits:
+            return "БЛОКНОТ НОТИ: недоступен в текущем чате."
+        return (
+            "БЛОКНОТ НОТИ (жёсткие лимиты):\n"
+            f"- max_entries: {limits.get('max_entries', 0)}\n"
+            f"- max_total_chars: {limits.get('max_total_chars', 0)}\n"
+            f"- max_entry_chars: {limits.get('max_entry_chars', 0)}\n"
+            "Используй notebook_* tool calls только для коротких и действительно важных заметок."
         )
 
     @staticmethod

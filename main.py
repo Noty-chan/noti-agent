@@ -17,11 +17,13 @@ from noty.core.message_handler import MessageHandler
 from noty.filters.embedding_filter import EmbeddingFilter
 from noty.filters.heuristic_filter import HeuristicFilter
 from noty.memory.semantic_retriever import LlamaSemanticRetriever
+from noty.memory.notebook import NotiNotebookManager
 from noty.memory.sqlite_db import SQLiteDBManager
 from noty.memory.recent_days_memory import RecentDaysMemory
 from noty.mood.mood_manager import MoodManager
 from noty.prompts.prompt_builder import ModularPromptBuilder
 from noty.thought.monologue import InternalMonologue, ThoughtLogger
+from noty.tools.notebook_tools import NotebookToolService, register_notebook_tools
 from noty.tools.tool_executor import SafeToolExecutor
 from noty.transport.vk.client import VKAPIClient
 from noty.transport.vk.polling import VKLongPollTransport
@@ -64,6 +66,8 @@ def build_bot(config: Dict[str, Any]) -> NotyBot:
     )
     mood_manager = MoodManager()
     tool_executor = SafeToolExecutor(owner_id=config["transport"].get("owner_id", 0))
+    notebook_manager = NotiNotebookManager(db_manager=db_manager)
+    register_notebook_tools(tool_executor, NotebookToolService(notebook=notebook_manager))
     api_rotator = APIRotator(
         api_keys=load_api_keys("./noty/config/api_keys.json"),
         backend=config.get("llm", {}).get("backend", "openai"),
