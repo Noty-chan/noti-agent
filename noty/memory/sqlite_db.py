@@ -135,6 +135,15 @@ class SQLiteDBManager:
                 UNIQUE(chat_id, reporter_user_id, target_display_name, normalized_alias)
             );
 
+
+            CREATE TABLE IF NOT EXISTS noti_notebook (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_id INTEGER NOT NULL,
+                note TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
             """
         )
         interaction_cols = {row[1] for row in cur.execute("PRAGMA table_info(interactions)").fetchall()}
@@ -190,6 +199,29 @@ class SQLiteDBManager:
         conn.close()
         return rows
 
+
+
+    @staticmethod
+    def get_notebook_limits() -> Dict[str, int]:
+        return {"max_entries": 25, "max_total_chars": 4000, "max_entry_chars": 280}
+
+    def get_notebook_notes(self, platform: str, chat_id: int, limit: int = 5) -> List[Dict[str, Any]]:
+        del platform
+        conn = self._connect()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT id, note, created_at, updated_at
+            FROM noti_notebook
+            WHERE chat_id = ?
+            ORDER BY updated_at DESC, id DESC
+            LIMIT ?
+            """,
+            (chat_id, max(limit, 1)),
+        )
+        rows = [dict(r) for r in cur.fetchall()]
+        conn.close()
+        return rows
 
     def create_personality_proposal(self, author: str, diff_summary: str, risk: str) -> int:
         conn = self._connect()
