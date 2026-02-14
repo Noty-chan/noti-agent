@@ -22,7 +22,10 @@ from noty.mood.mood_manager import MoodManager
 from noty.prompts.prompt_builder import ModularPromptBuilder
 from noty.thought.monologue import InternalMonologue, ThoughtLogger
 from noty.tools.tool_executor import SafeToolExecutor
-from noty.transport.vk import VKAPIClient, VKLongPollTransport, VKStateStore, VKWebhookHandler
+from noty.transport.vk.client import VKAPIClient
+from noty.transport.vk.polling import VKLongPollTransport
+from noty.transport.vk.state_store import VKStateStore
+from noty.transport.vk.webhook import VKWebhookHandler
 from noty.utils.logger import configure_logging
 
 
