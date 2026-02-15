@@ -157,22 +157,6 @@ class NotyBot:
                 pb_config = getattr(self.message_handler.prompt_builder, "config", {}) or {}
                 fallback = pb_config.get("conservative_fallback", {})
                 runtime_modifiers.update(fallback)
-
-            prompt = self.message_handler.prepare_prompt(
-                platform=platform,
-                chat_id=chat_id,
-                user_id=user_id,
-                message_text=text,
-                mood=mood_state["mood"],
-                energy=mood_state["energy"],
-                user_relationship=relationship,
-                runtime_modifiers=runtime_modifiers,
-                strategy_hints=self._build_strategy_hints(payload),
-                persona_profile=persona_slice,
-            )
-            if global_memory_summary:
-                prompt = f"{prompt}\n\nGLOBAL_NOTY_MEMORY:\n{global_memory_summary}"
-
             thought_entry = self.monologue.generate_thoughts(
                 {
                     "chat_id": chat_id,
@@ -186,6 +170,23 @@ class NotyBot:
                 },
                 cheap_model=True,
             )
+
+            prompt = self.message_handler.prepare_prompt(
+                platform=platform,
+                chat_id=chat_id,
+                user_id=user_id,
+                message_text=text,
+                mood=mood_state["mood"],
+                energy=mood_state["energy"],
+                user_relationship=relationship,
+                runtime_modifiers=runtime_modifiers,
+                strategy_hints=self._build_strategy_hints(payload),
+                persona_profile=persona_slice,
+                thought_context=thought_entry,
+                environment_context=self._build_environment_context(platform=platform),
+            )
+            if global_memory_summary:
+                prompt = f"{prompt}\n\nGLOBAL_NOTY_MEMORY:\n{global_memory_summary}"
 
             with self.metrics.time_block("llm_call_seconds", stage="llm_call", platform=platform):
                 llm_response = self.api_rotator.call(messages=[{"role": "user", "content": prompt}])
@@ -285,6 +286,31 @@ class NotyBot:
         if event.get("previous_interaction_outcome") == "fail":
             hints.setdefault("avoid_topics", []).append("конфликт")
         return hints
+
+    def _build_environment_context(self, platform: str) -> Dict[str, Any]:
+        capabilities: list[Dict[str, Any]] = []
+        for name, meta in self.tool_executor.tools_registry.items():
+            capabilities.append(
+                {
+                    "name": name,
+                    "description": meta.get("description", ""),
+                    "risk_level": meta.get("risk_level", "low"),
+                    "requires_owner": bool(meta.get("requires_owner", False)),
+                    "requires_private": bool(meta.get("requires_private", False)),
+                    "requires_confirmation": bool(meta.get("requires_confirmation", False)),
+                    "allowed_roles": meta.get("allowed_roles", []),
+                }
+            )
+
+        capabilities.sort(key=lambda item: item["name"])
+        return {
+            "platform": platform,
+            "agent_runtime": {
+                "can_call_tools": bool(self.tool_executor.tools_registry),
+                "can_list_tools": True,
+            },
+            "tools": capabilities,
+        }
 
     def _apply_tool_post_processing(self, tool_results: list[Dict[str, Any]]) -> None:
         if not tool_results:

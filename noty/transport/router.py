@@ -12,7 +12,9 @@ from noty.transport.telegram.client import TelegramClient
 from noty.transport.telegram.mapper import map_telegram_update
 from noty.transport.telegram.polling import TelegramPolling, TelegramWebhookReceiver
 from noty.transport.types import IncomingEvent, normalize_incoming_event
+from noty.transport.vk.client import VKAPIClient
 from noty.transport.vk.mapper import map_vk_event
+from noty.transport.vk.state_store import VKStateStore, run_with_backoff
 
 
 class EventSource(Protocol):
@@ -44,6 +46,8 @@ class TransportRouter:
             yield from adapter.iter_events()
 
 
+
+
 class _StaticEventSource:
     """Источник событий для тестов/локального режима без реального poller-а."""
 
@@ -52,6 +56,35 @@ class _StaticEventSource:
 
     def poll(self) -> list[dict[str, Any]]:
         return self.events
+
+class VKLongPollSource:
+    def __init__(self, client: VKAPIClient, state_store: VKStateStore, wait: int = 25):
+        self.client = client
+        self.state_store = state_store
+        self.wait = wait
+        self.server_info = run_with_backoff(self.client.get_longpoll_server)
+
+    def poll(self) -> list[dict[str, Any]]:
+        ts = self.state_store.get_longpoll_ts() or str(self.server_info["ts"])
+        response = run_with_backoff(
+            lambda: self.client.poll_events(
+                server=self.server_info["server"],
+                key=self.server_info["key"],
+                ts=ts,
+                wait=self.wait,
+            )
+        )
+        new_ts = str(response.get("ts", ts))
+        self.state_store.set_longpoll_ts(new_ts)
+        return response.get("updates", [])
+
+
+class VKWebhookEventSource:
+    def __init__(self, payload: dict[str, Any]):
+        self.payload = payload
+
+    def poll(self) -> list[dict[str, Any]]:
+        return [self.payload]
 
 
 def load_transport_config(path: str | Path = "noty/config/bot_config.yaml") -> dict[str, Any]:
@@ -71,7 +104,28 @@ def create_transport_router(config_path: str | Path = "noty/config/bot_config.ya
     adapters: list[PlatformAdapter] = []
     for platform in active_platforms:
         if platform == "vk":
-            adapters.append(PlatformAdapter(platform="vk", source=_StaticEventSource(), mapper=map_vk_event))
+            vk_mode = transport_cfg.get("mode", "dry_run")
+            vk_token = transport_cfg.get("vk_token", "")
+            vk_group_id = int(transport_cfg.get("vk_group_id", 0) or 0)
+
+            if vk_mode == "vk_longpoll" and vk_token and vk_group_id:
+                client = VKAPIClient(
+                    token=vk_token,
+                    group_id=vk_group_id,
+                    api_version=transport_cfg.get("vk_api_version", "5.199"),
+                    timeout_seconds=int(transport_cfg.get("timeout_seconds", 25)),
+                )
+                state_store = VKStateStore(
+                    state_path=transport_cfg.get("state_path", "./noty/data/vk_state.json"),
+                    dedup_cache_size=int(transport_cfg.get("dedup_cache_size", 5000)),
+                )
+                source = VKLongPollSource(client=client, state_store=state_store, wait=int(transport_cfg.get("wait", 25)))
+            elif vk_mode == "vk_webhook":
+                source = VKWebhookEventSource(transport_cfg.get("vk_webhook_update", {}))
+            else:
+                source = _StaticEventSource()
+
+            adapters.append(PlatformAdapter(platform="vk", source=source, mapper=map_vk_event))
             continue
 
         if platform == "telegram":

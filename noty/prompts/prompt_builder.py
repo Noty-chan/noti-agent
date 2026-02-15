@@ -89,6 +89,52 @@ class ModularPromptBuilder:
             f"- active_persona_profile: {json.dumps(persona_profile or {}, ensure_ascii=False)}"
         )
 
+
+    @staticmethod
+    def _build_agent_environment_layer(
+        environment_context: Optional[Dict[str, Any]] = None,
+        thought_context: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        environment_context = environment_context or {}
+        thought_context = thought_context or {}
+        tools = environment_context.get("tools", [])
+
+        if tools:
+            tool_lines = []
+            for tool in tools:
+                tool_lines.append(
+                    "- {name} | risk={risk} | confirm={confirm} | owner_only={owner} | private_only={private} | roles={roles} | desc={desc}".format(
+                        name=tool.get("name", "unknown"),
+                        risk=tool.get("risk_level", "low"),
+                        confirm=tool.get("requires_confirmation", False),
+                        owner=tool.get("requires_owner", False),
+                        private=tool.get("requires_private", False),
+                        roles=",".join(tool.get("allowed_roles") or ["any"]),
+                        desc=tool.get("description") or "-",
+                    )
+                )
+            tools_block = "\n".join(tool_lines)
+        else:
+            tools_block = "- Нет зарегистрированных инструментов."
+
+        strategy = thought_context.get("strategy", "unknown")
+        quality_score = float(thought_context.get("quality_score", 0.0))
+        decision = thought_context.get("decision", "unknown")
+
+        return (
+            "СРЕДА И ВОЗМОЖНОСТИ АГЕНТА:\n"
+            f"- platform: {environment_context.get('platform', 'unknown')}\n"
+            f"- can_call_tools: {environment_context.get('agent_runtime', {}).get('can_call_tools', False)}\n"
+            f"- can_list_tools: {environment_context.get('agent_runtime', {}).get('can_list_tools', False)}\n"
+            "- tools_registry:\n"
+            f"{tools_block}\n\n"
+            "THOUGHT GUIDANCE (internal):\n"
+            f"- strategy_from_thoughts: {strategy}\n"
+            f"- thought_quality_score: {quality_score:.3f}\n"
+            f"- thought_decision: {decision}\n"
+            "Используй стратегию мыслей при формировании тона и длины ответа."
+        )
+
     def build_full_prompt(
         self,
         context: Dict[str, Any],
@@ -97,6 +143,8 @@ class ModularPromptBuilder:
         user_relationship: Optional[Dict[str, Any]] = None,
         runtime_modifiers: Optional[Dict[str, Any]] = None,
         persona_profile: Optional[Dict[str, Any]] = None,
+        thought_context: Optional[Dict[str, Any]] = None,
+        environment_context: Optional[Dict[str, Any]] = None,
     ) -> str:
         personality_layer = self._build_personality_layer(runtime_modifiers)
         sep = self.config.get("prompt_markers", {}).get("separator", "═══════════════════════════════════════════════════════════")
@@ -106,6 +154,8 @@ class ModularPromptBuilder:
             f"{personality_layer}\n\n"
             f"{sep}\n\n"
             f"{self._build_persona_adaptation_layer(persona_profile)}\n\n"
+            f"{sep}\n\n"
+            f"{self._build_agent_environment_layer(environment_context, thought_context)}\n\n"
             f"{sep}\n\n"
             f"{self._build_notebook_limits_layer(context)}\n\n"
             f"{sep}\n\n"
@@ -214,6 +264,8 @@ class ModularPromptBuilder:
             f"{preview_personality}\n\n"
             f"{sep}\n\n"
             f"{self._build_persona_adaptation_layer({})}\n\n"
+            f"{sep}\n\n"
+            f"{self._build_agent_environment_layer({}, {})}\n\n"
             f"{sep}\n\n"
             f"{self._generate_mood_layer(mood, energy)}\n\n"
             f"{sep}\n\n"
