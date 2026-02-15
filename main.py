@@ -89,10 +89,16 @@ def build_bot(config: Dict[str, Any]) -> NotyBot:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Noty bot runner")
     parser.add_argument("--mode", choices=["vk_longpoll", "vk_webhook", "dry_run"], default=None)
+    parser.add_argument("--log-level", default=None)
+    parser.add_argument("--log-file", default=None)
     args = parser.parse_args()
 
-    configure_logging()
     config = load_yaml("./noty/config/bot_config.yaml")
+    log_cfg = config.get("logging", {})
+    configure_logging(
+        level=args.log_level or log_cfg.get("level"),
+        log_file=args.log_file or log_cfg.get("file"),
+    )
     mode = args.mode or config.get("transport", {}).get("mode", "dry_run")
 
     if mode == "dry_run":

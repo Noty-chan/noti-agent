@@ -21,6 +21,10 @@
    ```bash
    python -m noty.cli run
    ```
+   Для расширенных логов на первых тестах:
+   ```bash
+   python -m noty.cli run --mode dry_run --log-level DEBUG --log-file ./noty/data/noty.log
+   ```
 4. Открыть web-панель настройки (localhost):
    ```bash
    python -m noty.cli panel --host 127.0.0.1 --port 8765

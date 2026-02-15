@@ -26,3 +26,7 @@ transport:
   timeout_seconds: 25
   state_path: "./noty/data/vk_state.json"
   dedup_cache_size: 5000
+
+logging:
+  level: "INFO"
+  file: ""
