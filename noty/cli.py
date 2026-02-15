@@ -85,7 +85,7 @@ def setup_command(install_deps: bool = True) -> int:
     return 0
 
 
-def _health_status(config: dict[str, Any]) -> None:
+def _health_status(config: dict[str, Any], log_level: str | None = None, log_file: str | None = None) -> None:
     print("== Health check ==")
     transport_cfg = config.get("transport", {})
     mode = transport_cfg.get("mode", "dry_run")
@@ -102,6 +102,12 @@ def _health_status(config: dict[str, Any]) -> None:
     _print_status("Transport mode", True, mode)
     _print_status("Active platforms", True, ", ".join(active_platforms))
 
+    logging_cfg = config.get("logging", {})
+    resolved_level = (log_level or logging_cfg.get("level") or "INFO").upper()
+    resolved_file = log_file or logging_cfg.get("file") or "stdout only"
+    _print_status("Log level", True, resolved_level)
+    _print_status("Log file", True, str(resolved_file))
+
     vk_required = "vk" in active_platforms and mode in {"vk_longpoll", "vk_webhook"}
     if vk_required:
         vk_token_ok = bool(transport_cfg.get("vk_token"))
@@ -116,7 +122,7 @@ def _health_status(config: dict[str, Any]) -> None:
         _print_status("Telegram token", tg_token_ok, "опционально для first-run")
 
 
-def run_command(mode: str | None = None) -> int:
+def run_command(mode: str | None = None, log_level: str | None = None, log_file: str | None = None) -> int:
     if not BOT_CONFIG_PATH.exists():
         _print_status("Config", False, f"не найден: {BOT_CONFIG_PATH}")
         return 1
@@ -126,11 +132,15 @@ def run_command(mode: str | None = None) -> int:
     except RuntimeError as exc:
         _print_status("Config parse", False, str(exc))
         return 1
-    _health_status(config)
+    _health_status(config, log_level=log_level, log_file=log_file)
 
     cmd = [sys.executable, "main.py"]
     if mode:
         cmd.extend(["--mode", mode])
+    if log_level:
+        cmd.extend(["--log-level", log_level])
+    if log_file:
+        cmd.extend(["--log-file", log_file])
 
     print("== Запуск Noty ==")
     print("Подсказка: команда `run` запускает только бот-процесс. Web-панель запускается отдельно через `python -m noty.cli panel`.")
@@ -180,6 +190,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     run_parser = subparsers.add_parser("run", help="локальный запуск Noty")
     run_parser.add_argument("--mode", choices=["vk_longpoll", "vk_webhook", "dry_run"], default=None)
+    run_parser.add_argument("--log-level", default=None, help="уровень логирования (DEBUG/INFO/WARNING/ERROR)")
+    run_parser.add_argument("--log-file", default=None, help="путь к файлу логов (например ./noty/data/noty.log)")
 
     panel_parser = subparsers.add_parser("panel", help="запуск localhost web-панели конфигурации")
     panel_parser.add_argument("--host", default="127.0.0.1")
@@ -202,7 +214,7 @@ def main() -> None:
         raise SystemExit(code)
 
     if args.command == "run":
-        code = run_command(mode=args.mode)
+        code = run_command(mode=args.mode, log_level=args.log_level, log_file=args.log_file)
         raise SystemExit(code)
 
     if args.command == "panel":
