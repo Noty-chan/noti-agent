@@ -9,6 +9,7 @@ import secrets
 import subprocess
 import sys
 import threading
+import uuid
 from datetime import datetime
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,7 +20,7 @@ import yaml
 
 try:
     from fastapi import Depends, FastAPI, Form, HTTPException, Request, status
-    from fastapi.responses import HTMLResponse, RedirectResponse
+    from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
     from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
     FASTAPI_AVAILABLE = True
@@ -60,6 +61,11 @@ except ImportError:  # pragma: no cover - fallback для окружений б�
     class HTMLResponse(str):
         pass
 
+    class JSONResponse(dict):  # type: ignore[override]
+        def __init__(self, content, status_code: int = 200):
+            super().__init__(content)
+            self.status_code = status_code
+
     class _Status:
         HTTP_401_UNAUTHORIZED = 401
 
@@ -78,6 +84,7 @@ RUNTIME_LOG_PATH = PROJECT_ROOT / "noty" / "data" / "logs" / "runtime" / "noty-r
 INTERACTIONS_LOG_DIR = PROJECT_ROOT / "noty" / "data" / "logs" / "interactions"
 THOUGHTS_LOG_DIR = PROJECT_ROOT / "noty" / "data" / "logs" / "thoughts"
 ACTIONS_LOG_DIR = PROJECT_ROOT / "noty" / "data" / "logs" / "actions"
+CHAT_TRACE_LOG_PATH = PROJECT_ROOT / "noty" / "data" / "logs" / "runtime" / "noty-chat-trace.jsonl"
 
 
 security = HTTPBasic()
@@ -180,7 +187,168 @@ class LocalPanelChatSimulator:
         self._bot: Any | None = None
         self._lock = threading.RLock()
         self._history: list[dict[str, str]] = []
+        self._jobs: dict[str, dict[str, Any]] = {}
         self._history_limit = history_limit
+
+    def _log_chat_trace(self, payload: dict[str, Any]) -> None:
+        record = {
+            "timestamp": datetime.now().isoformat(),
+            **payload,
+        }
+        CHAT_TRACE_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with CHAT_TRACE_LOG_PATH.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+    def _process_event(self, request_id: str, event: dict[str, Any]) -> dict[str, Any]:
+        with self._lock:
+            if self._bot is None:
+                self._bot = self._build_bot()
+            bot = self._bot
+
+        self._log_chat_trace(
+            {
+                "request_id": request_id,
+                "stage": "llm_pipeline_started",
+                "chat_id": event["chat_id"],
+                "user_id": event["user_id"],
+            }
+        )
+        result = bot.handle_message(event)
+        self._log_chat_trace(
+            {
+                "request_id": request_id,
+                "stage": "llm_pipeline_finished",
+                "status": result.get("status", "unknown"),
+                "finish_reason": result.get("finish_reason"),
+            }
+        )
+        return result
+
+    def _update_history_record(self, request_id: str, **updates: str) -> None:
+        for row in self._history:
+            if row.get("request_id") == request_id:
+                row.update(updates)
+                return
+
+    def _run_async_send(self, request_id: str, event: dict[str, Any]) -> None:
+        started_at = datetime.now()
+        with self._lock:
+            if request_id in self._jobs:
+                self._jobs[request_id].update(
+                    {
+                        "status": "running",
+                        "started_at": started_at.isoformat(),
+                    }
+                )
+            self._update_history_record(request_id, status="running")
+        self._log_chat_trace({"request_id": request_id, "stage": "worker_started"})
+
+        try:
+            result = self._process_event(request_id=request_id, event=event)
+            finished_at = datetime.now()
+            duration_ms = int((finished_at - started_at).total_seconds() * 1000)
+            with self._lock:
+                self._jobs[request_id].update(
+                    {
+                        "status": str(result.get("status", "unknown")),
+                        "result": result,
+                        "finished_at": finished_at.isoformat(),
+                        "duration_ms": duration_ms,
+                    }
+                )
+                self._update_history_record(
+                    request_id,
+                    noty=str(result.get("text", "(ответ не сгенерирован)")),
+                    status=str(result.get("status", "unknown")),
+                    duration_ms=str(duration_ms),
+                )
+            self._log_chat_trace(
+                {
+                    "request_id": request_id,
+                    "stage": "worker_finished",
+                    "status": result.get("status", "unknown"),
+                    "duration_ms": duration_ms,
+                }
+            )
+        except Exception as exc:  # noqa: BLE001
+            finished_at = datetime.now()
+            duration_ms = int((finished_at - started_at).total_seconds() * 1000)
+            with self._lock:
+                self._jobs[request_id].update(
+                    {
+                        "status": "error",
+                        "error": str(exc),
+                        "finished_at": finished_at.isoformat(),
+                        "duration_ms": duration_ms,
+                    }
+                )
+                self._update_history_record(
+                    request_id,
+                    noty=f"(ошибка: {exc})",
+                    status="error",
+                    duration_ms=str(duration_ms),
+                )
+            self._log_chat_trace(
+                {
+                    "request_id": request_id,
+                    "stage": "worker_failed",
+                    "error": str(exc),
+                    "duration_ms": duration_ms,
+                }
+            )
+
+    def enqueue_send(self, user_text: str, chat_id: int, user_id: int, username: str) -> str:
+        request_id = uuid.uuid4().hex
+        event = {
+            "platform": "web_panel",
+            "chat_id": chat_id,
+            "user_id": user_id,
+            "text": user_text,
+            "is_private": True,
+            "username": username,
+            "chat_name": f"web_panel_chat_{chat_id}",
+        }
+        accepted_at = datetime.now()
+        with self._lock:
+            self._jobs[request_id] = {
+                "request_id": request_id,
+                "status": "pending",
+                "accepted_at": accepted_at.isoformat(),
+                "event": {
+                    "chat_id": chat_id,
+                    "user_id": user_id,
+                    "username": username,
+                },
+            }
+            self._history.append(
+                {
+                    "request_id": request_id,
+                    "timestamp": accepted_at.strftime("%H:%M:%S"),
+                    "user": user_text,
+                    "noty": "(в обработке)",
+                    "status": "pending",
+                    "duration_ms": "",
+                }
+            )
+            if len(self._history) > self._history_limit:
+                self._history = self._history[-self._history_limit :]
+        self._log_chat_trace(
+            {
+                "request_id": request_id,
+                "stage": "accepted",
+                "chat_id": chat_id,
+                "user_id": user_id,
+            }
+        )
+
+        worker = threading.Thread(
+            target=self._run_async_send,
+            args=(request_id, event),
+            daemon=True,
+            name=f"noty-web-panel-{request_id[:8]}",
+        )
+        worker.start()
+        return request_id
 
     def _build_bot(self) -> Any:
         from main import build_bot, load_yaml
@@ -189,31 +357,59 @@ class LocalPanelChatSimulator:
         return build_bot(config)
 
     def send(self, user_text: str, chat_id: int, user_id: int, username: str) -> dict[str, Any]:
+        request_id = uuid.uuid4().hex
+        event = {
+            "platform": "web_panel",
+            "chat_id": chat_id,
+            "user_id": user_id,
+            "text": user_text,
+            "is_private": True,
+            "username": username,
+            "chat_name": f"web_panel_chat_{chat_id}",
+        }
+        started_at = datetime.now()
+        result = self._process_event(request_id=request_id, event=event)
+        duration_ms = int((datetime.now() - started_at).total_seconds() * 1000)
         with self._lock:
-            if self._bot is None:
-                self._bot = self._build_bot()
-
-            event = {
-                "platform": "web_panel",
-                "chat_id": chat_id,
-                "user_id": user_id,
-                "text": user_text,
-                "is_private": True,
-                "username": username,
-                "chat_name": f"web_panel_chat_{chat_id}",
-            }
-            result = self._bot.handle_message(event)
             self._history.append(
                 {
+                    "request_id": request_id,
                     "timestamp": datetime.now().strftime("%H:%M:%S"),
                     "user": user_text,
                     "noty": str(result.get("text", "(ответ не сгенерирован)")),
                     "status": str(result.get("status", "unknown")),
+                    "duration_ms": str(duration_ms),
                 }
             )
             if len(self._history) > self._history_limit:
                 self._history = self._history[-self._history_limit :]
-            return result
+        return result
+
+    def status(self, request_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            job = self._jobs.get(request_id)
+            return dict(job) if job else None
+
+    def health_snapshot(self) -> dict[str, Any]:
+        with self._lock:
+            jobs = list(self._jobs.values())
+        statuses: dict[str, int] = {"pending": 0, "running": 0, "responded": 0, "ignored": 0, "error": 0}
+        completed_durations: list[int] = []
+        last_error: str | None = None
+        for job in jobs:
+            status_name = str(job.get("status", "unknown"))
+            statuses[status_name] = statuses.get(status_name, 0) + 1
+            if isinstance(job.get("duration_ms"), int):
+                completed_durations.append(job["duration_ms"])
+            if status_name == "error":
+                last_error = str(job.get("error", "unknown"))
+        avg_duration = int(sum(completed_durations) / len(completed_durations)) if completed_durations else 0
+        return {
+            "jobs_total": len(jobs),
+            "statuses": statuses,
+            "avg_duration_ms": avg_duration,
+            "last_error": last_error,
+        }
 
     def history(self) -> list[dict[str, str]]:
         with self._lock:
@@ -307,6 +503,8 @@ def _compose_view_model() -> dict[str, Any]:
         "vk_group_id": transport.get("vk_group_id", ""),
         "llm_backend": llm_cfg.get("backend", "openai"),
         "openrouter_api_key": env_data.get("OPENROUTER_API_KEY", ""),
+        "hf_token": env_data.get("HF_TOKEN", ""),
+        "hf_hub_disable_symlinks_warning": env_data.get("HF_HUB_DISABLE_SYMLINKS_WARNING", "1"),
         "sqlite_path": env_data.get("SQLITE_PATH", "./noty/data/noty.db"),
         "mem0_enabled": mem0_enabled,
         "mem0_api_key": env_data.get("MEM0_API_KEY", ""),
@@ -320,6 +518,7 @@ def _compose_view_model() -> dict[str, Any]:
         "api_keys_count": len(keys_cfg.get("openrouter_keys", [])),
         "full_logs": _collect_full_logs(),
         "chat_history": history,
+        "chat_health": CHAT_SIMULATOR.health_snapshot(),
     }
 
 
@@ -346,6 +545,7 @@ def _collect_full_logs() -> str:
     interactions = _collect_jsonl_tail(INTERACTIONS_LOG_DIR)
     thoughts = _collect_jsonl_tail(THOUGHTS_LOG_DIR)
     actions = _collect_jsonl_tail(ACTIONS_LOG_DIR)
+    chat_trace = _read_tail(CHAT_TRACE_LOG_PATH, max_lines=250)
 
     if runtime:
         sections.append(f"=== Runtime log (main.py stdout/stderr) ===\n{runtime}")
@@ -355,6 +555,8 @@ def _collect_full_logs() -> str:
         sections.append(f"=== Thoughts log ===\n{thoughts}")
     if actions:
         sections.append(f"=== Actions log ===\n{actions}")
+    if chat_trace:
+        sections.append(f"=== Web panel chat trace ===\n{chat_trace}")
 
     return "\n\n".join(sections) if sections else "Логи пока пустые."
 
@@ -362,6 +564,8 @@ def _collect_full_logs() -> str:
 def save_runtime_settings(form_data: dict[str, str]) -> None:
     env_data = _read_env(PATHS.env_path)
     env_data["OPENROUTER_API_KEY"] = form_data.get("openrouter_api_key", "").strip()
+    env_data["HF_TOKEN"] = form_data.get("hf_token", "").strip()
+    env_data["HF_HUB_DISABLE_SYMLINKS_WARNING"] = form_data.get("hf_hub_disable_symlinks_warning", "1").strip() or "1"
     env_data["SQLITE_PATH"] = form_data.get("sqlite_path", "./noty/data/noty.db").strip()
     env_data["MEM0_ENABLED"] = form_data.get("mem0_enabled", "false").strip().lower()
     env_data["MEM0_API_KEY"] = form_data.get("mem0_api_key", "").strip()
@@ -406,7 +610,9 @@ def index(_: str = Depends(_verify_auth)) -> str:
     chat_rows = "".join(
         (
             "<div style='border:1px solid #ddd; padding:8px; margin-bottom:8px;'>"
-            f"<div><b>{html.escape(row['timestamp'])}</b> | status: {html.escape(row['status'])}</div>"
+            f"<div><b>{html.escape(row['timestamp'])}</b> | status: {html.escape(row['status'])}"
+            f" | req: {html.escape(row.get('request_id', '-'))}"
+            f" | duration_ms: {html.escape(row.get('duration_ms', '-'))}</div>"
             f"<div><b>Ты:</b> {html.escape(row['user'])}</div>"
             f"<div><b>Ноти:</b> {html.escape(row['noty'])}</div>"
             "</div>"
@@ -429,6 +635,8 @@ def index(_: str = Depends(_verify_auth)) -> str:
         <label>VK group id<br><input name='vk_group_id' style='width:100%' value='{safe['vk_group_id']}'></label><br><br>
         <label>LLM backend<br><input name='llm_backend' style='width:100%' value='{safe['llm_backend']}'></label><br><br>
         <label>OpenRouter API key<br><input name='openrouter_api_key' style='width:100%' value='{safe['openrouter_api_key']}'></label><br><br>
+        <label>HF token (для ускоренных/аутентифицированных загрузок embeddings)<br><input name='hf_token' style='width:100%' value='{safe['hf_token']}'></label><br><br>
+        <label>HF disable symlink warning (Windows)<br><input name='hf_hub_disable_symlinks_warning' style='width:100%' value='{safe['hf_hub_disable_symlinks_warning']}'></label><br><br>
         <label>SQLite path<br><input name='sqlite_path' style='width:100%' value='{safe['sqlite_path']}'></label><br><br>
 
         <h2>Mem0 / Qdrant</h2>
@@ -456,6 +664,7 @@ def index(_: str = Depends(_verify_auth)) -> str:
 
       <hr>
       <h2>Чат с Ноти (симуляция отдельного ЛС)</h2>
+      <p><b>Chat health:</b> jobs={vm['chat_health']['jobs_total']} | avg_duration_ms={vm['chat_health']['avg_duration_ms']} | statuses={html.escape(str(vm['chat_health']['statuses']))}</p>
       <form method='post' action='/chat/send'>
         <label>Chat ID<br><input name='chat_id' style='width:100%' value='9001'></label><br><br>
         <label>User ID<br><input name='user_id' style='width:100%' value='1001'></label><br><br>
@@ -481,6 +690,8 @@ def save(
     vk_group_id: str = Form("0"),
     llm_backend: str = Form("openai"),
     openrouter_api_key: str = Form(""),
+    hf_token: str = Form(""),
+    hf_hub_disable_symlinks_warning: str = Form("1"),
     sqlite_path: str = Form("./noty/data/noty.db"),
     mem0_enabled: str = Form("false"),
     mem0_api_key: str = Form(""),
@@ -495,6 +706,8 @@ def save(
         "vk_group_id": vk_group_id,
         "llm_backend": llm_backend,
         "openrouter_api_key": openrouter_api_key,
+        "hf_token": hf_token,
+        "hf_hub_disable_symlinks_warning": hf_hub_disable_symlinks_warning,
         "sqlite_path": sqlite_path,
         "mem0_enabled": mem0_enabled,
         "mem0_api_key": mem0_api_key,
@@ -542,10 +755,23 @@ def chat_send(
     _: str = Depends(_verify_auth),
 ) -> RedirectResponse:
     if message_text.strip():
-        CHAT_SIMULATOR.send(
+        CHAT_SIMULATOR.enqueue_send(
             user_text=message_text.strip(),
             chat_id=int(chat_id or 9001),
             user_id=int(user_id or 1001),
             username=username.strip() or "web_user",
         )
     return RedirectResponse(url=str(request.url_for("index")), status_code=303)
+
+
+@app.get("/chat/health")
+def chat_health(_: str = Depends(_verify_auth)) -> JSONResponse:
+    return JSONResponse(CHAT_SIMULATOR.health_snapshot())
+
+
+@app.get("/chat/status/{request_id}")
+def chat_status(request_id: str, _: str = Depends(_verify_auth)) -> JSONResponse:
+    status_payload = CHAT_SIMULATOR.status(request_id)
+    if status_payload is None:
+        return JSONResponse({"error": "request_id_not_found", "request_id": request_id}, status_code=404)
+    return JSONResponse(status_payload)
