@@ -1,4 +1,5 @@
 import json
+import time
 from pathlib import Path
 
 import yaml
@@ -113,3 +114,54 @@ def test_chat_simulator_send_stores_history(monkeypatch):
     assert len(history) == 2
     assert history[0]["user"] == "еще"
     assert history[1]["noty"] == "echo:третье"
+
+
+
+def test_chat_simulator_enqueue_send_updates_job_and_history(monkeypatch):
+    class DummyBot:
+        def handle_message(self, event):
+            return {"status": "responded", "text": f"echo:{event['text']}"}
+
+    simulator = web_panel.LocalPanelChatSimulator(history_limit=5)
+    monkeypatch.setattr(simulator, "_build_bot", lambda: DummyBot())
+
+    request_id = simulator.enqueue_send("привет", chat_id=10, user_id=22, username="u")
+
+    for _ in range(100):
+        status_payload = simulator.status(request_id)
+        if status_payload and status_payload.get("status") == "responded":
+            break
+        time.sleep(0.01)
+    else:
+        raise AssertionError("Фоновая задача не завершилась")
+
+    assert status_payload is not None
+    assert status_payload["status"] == "responded"
+    assert status_payload["result"]["text"] == "echo:привет"
+
+    history = simulator.history()
+    matching = [row for row in history if row.get("request_id") == request_id]
+    assert len(matching) == 1
+    assert matching[0]["status"] == "responded"
+    assert matching[0]["noty"] == "echo:привет"
+
+
+def test_chat_health_snapshot_contains_status_counters(monkeypatch):
+    class DummyBot:
+        def handle_message(self, event):
+            return {"status": "ignored", "text": ""}
+
+    simulator = web_panel.LocalPanelChatSimulator(history_limit=5)
+    monkeypatch.setattr(simulator, "_build_bot", lambda: DummyBot())
+
+    request_id = simulator.enqueue_send("test", chat_id=11, user_id=33, username="u")
+    for _ in range(100):
+        status_payload = simulator.status(request_id)
+        if status_payload and status_payload.get("status") == "ignored":
+            break
+        time.sleep(0.01)
+    health = simulator.health_snapshot()
+
+    assert health["jobs_total"] >= 1
+    assert health["statuses"]["ignored"] >= 1
+    assert "avg_duration_ms" in health
