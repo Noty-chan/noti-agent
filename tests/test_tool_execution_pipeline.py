@@ -213,3 +213,38 @@ def test_bot_builds_thoughts_before_prompt_and_passes_strategy_context(tmp_path)
     env_context = handler.prompt_kwargs["environment_context"]
     assert env_context["agent_runtime"]["can_list_tools"] is True
     assert env_context["tools"][0]["name"] == "echo"
+
+
+class _NeverRespondMessageHandler(_MessageHandlerStub):
+    class _NeverDecision:
+        should_respond = False
+        reason = "randomized_drop"
+        score = 0.1
+        threshold = 0.5
+
+    def decide_reaction(self, text: str):
+        return self._NeverDecision()
+
+
+def test_bot_force_respond_skips_interest_filter(tmp_path):
+    db = SQLiteDBManager(str(tmp_path / "noty.db"))
+    executor = SafeToolExecutor(owner_id=1, actions_log_dir=str(tmp_path / "actions"))
+    executor.register_tool("echo", _echo)
+    mood = MoodManager()
+
+    bot = NotyBot(
+        api_rotator=_RotatorStub(),
+        message_handler=_NeverRespondMessageHandler(),
+        mood_manager=mood,
+        tool_executor=executor,
+        monologue=_MonologueStub(),
+        db_manager=db,
+        relationship_manager=_RelationshipStub(),
+    )
+
+    result = bot.handle_message(
+        {"chat_id": 1, "user_id": 1, "text": "сделай", "username": "u1", "force_respond": True}
+    )
+
+    assert result["status"] == "responded"
+    assert result["text"]
