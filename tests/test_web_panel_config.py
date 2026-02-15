@@ -30,6 +30,8 @@ def test_save_runtime_settings_updates_files(tmp_path: Path, monkeypatch):
             "vk_group_id": "42",
             "llm_backend": "litellm",
             "openrouter_api_key": "or-key",
+            "hf_token": "hf-token",
+            "hf_hub_disable_symlinks_warning": "1",
             "sqlite_path": "./noty/data/test.db",
             "mem0_enabled": "true",
             "mem0_api_key": "m-key",
@@ -42,6 +44,8 @@ def test_save_runtime_settings_updates_files(tmp_path: Path, monkeypatch):
 
     env_data = web_panel._read_env(env_path)
     assert env_data["OPENROUTER_API_KEY"] == "or-key"
+    assert env_data["HF_TOKEN"] == "hf-token"
+    assert env_data["HF_HUB_DISABLE_SYMLINKS_WARNING"] == "1"
     assert env_data["LOCAL_PANEL_PASSWORD"] == "new-secret"
 
     bot_cfg = yaml.safe_load(bot_cfg_path.read_text(encoding="utf-8"))
@@ -165,3 +169,21 @@ def test_chat_health_snapshot_contains_status_counters(monkeypatch):
     assert health["jobs_total"] >= 1
     assert health["statuses"]["ignored"] >= 1
     assert "avg_duration_ms" in health
+
+
+
+def test_embedding_filter_sets_hf_env_defaults(monkeypatch):
+    import importlib
+    import sys
+
+    monkeypatch.delenv("HF_HUB_DISABLE_SYMLINKS_WARNING", raising=False)
+    monkeypatch.setenv("HF_TOKEN", "abc")
+    monkeypatch.delenv("HUGGINGFACEHUB_API_TOKEN", raising=False)
+
+    module_name = "noty.filters.embedding_filter"
+    if module_name in sys.modules:
+        del sys.modules[module_name]
+    ef_module = importlib.import_module(module_name)
+
+    assert ef_module.os.getenv("HF_HUB_DISABLE_SYMLINKS_WARNING") == "1"
+    assert ef_module.os.getenv("HUGGINGFACEHUB_API_TOKEN") == "abc"

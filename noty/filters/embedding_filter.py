@@ -2,14 +2,28 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import pickle
+import time
+import warnings
 from typing import Dict, Iterable, List, Tuple
 
 import numpy as np
 from sentence_transformers import SentenceTransformer
 
 from .interest_vectors import INTEREST_TOPICS
+
+
+os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
+if os.getenv("HF_TOKEN") and not os.getenv("HUGGINGFACEHUB_API_TOKEN"):
+    os.environ["HUGGINGFACEHUB_API_TOKEN"] = os.environ["HF_TOKEN"]
+
+warnings.filterwarnings(
+    "ignore",
+    message=r"`huggingface_hub` cache-system uses symlinks.*",
+    category=UserWarning,
+)
 
 
 class EmbeddingFilter:
@@ -19,6 +33,8 @@ class EmbeddingFilter:
         cache_path: str = "./noty/data/embeddings_cache",
         encoder: SentenceTransformer | None = None,
     ):
+        self.logger = logging.getLogger(__name__)
+        started_at = time.perf_counter()
         self.encoder = encoder or SentenceTransformer(model_name)
         self.cache_path = cache_path
         os.makedirs(cache_path, exist_ok=True)
@@ -27,6 +43,13 @@ class EmbeddingFilter:
         self._message_vector_cache: Dict[str, np.ndarray] = {}
         self.cache_hits = 0
         self.cache_misses = 0
+        self.logger.info(
+            "EmbeddingFilter initialized: model=%s cache_path=%s startup_ms=%s hf_token=%s",
+            model_name,
+            cache_path,
+            round((time.perf_counter() - started_at) * 1000, 2),
+            "configured" if os.getenv("HF_TOKEN") else "missing",
+        )
 
     def _load_or_create_interest_vectors(self) -> np.ndarray:
         cache_file = os.path.join(self.cache_path, "interest_vectors.pkl")

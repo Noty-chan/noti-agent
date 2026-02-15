@@ -503,6 +503,8 @@ def _compose_view_model() -> dict[str, Any]:
         "vk_group_id": transport.get("vk_group_id", ""),
         "llm_backend": llm_cfg.get("backend", "openai"),
         "openrouter_api_key": env_data.get("OPENROUTER_API_KEY", ""),
+        "hf_token": env_data.get("HF_TOKEN", ""),
+        "hf_hub_disable_symlinks_warning": env_data.get("HF_HUB_DISABLE_SYMLINKS_WARNING", "1"),
         "sqlite_path": env_data.get("SQLITE_PATH", "./noty/data/noty.db"),
         "mem0_enabled": mem0_enabled,
         "mem0_api_key": env_data.get("MEM0_API_KEY", ""),
@@ -562,6 +564,8 @@ def _collect_full_logs() -> str:
 def save_runtime_settings(form_data: dict[str, str]) -> None:
     env_data = _read_env(PATHS.env_path)
     env_data["OPENROUTER_API_KEY"] = form_data.get("openrouter_api_key", "").strip()
+    env_data["HF_TOKEN"] = form_data.get("hf_token", "").strip()
+    env_data["HF_HUB_DISABLE_SYMLINKS_WARNING"] = form_data.get("hf_hub_disable_symlinks_warning", "1").strip() or "1"
     env_data["SQLITE_PATH"] = form_data.get("sqlite_path", "./noty/data/noty.db").strip()
     env_data["MEM0_ENABLED"] = form_data.get("mem0_enabled", "false").strip().lower()
     env_data["MEM0_API_KEY"] = form_data.get("mem0_api_key", "").strip()
@@ -631,6 +635,8 @@ def index(_: str = Depends(_verify_auth)) -> str:
         <label>VK group id<br><input name='vk_group_id' style='width:100%' value='{safe['vk_group_id']}'></label><br><br>
         <label>LLM backend<br><input name='llm_backend' style='width:100%' value='{safe['llm_backend']}'></label><br><br>
         <label>OpenRouter API key<br><input name='openrouter_api_key' style='width:100%' value='{safe['openrouter_api_key']}'></label><br><br>
+        <label>HF token (для ускоренных/аутентифицированных загрузок embeddings)<br><input name='hf_token' style='width:100%' value='{safe['hf_token']}'></label><br><br>
+        <label>HF disable symlink warning (Windows)<br><input name='hf_hub_disable_symlinks_warning' style='width:100%' value='{safe['hf_hub_disable_symlinks_warning']}'></label><br><br>
         <label>SQLite path<br><input name='sqlite_path' style='width:100%' value='{safe['sqlite_path']}'></label><br><br>
 
         <h2>Mem0 / Qdrant</h2>
@@ -684,6 +690,8 @@ def save(
     vk_group_id: str = Form("0"),
     llm_backend: str = Form("openai"),
     openrouter_api_key: str = Form(""),
+    hf_token: str = Form(""),
+    hf_hub_disable_symlinks_warning: str = Form("1"),
     sqlite_path: str = Form("./noty/data/noty.db"),
     mem0_enabled: str = Form("false"),
     mem0_api_key: str = Form(""),
@@ -698,6 +706,8 @@ def save(
         "vk_group_id": vk_group_id,
         "llm_backend": llm_backend,
         "openrouter_api_key": openrouter_api_key,
+        "hf_token": hf_token,
+        "hf_hub_disable_symlinks_warning": hf_hub_disable_symlinks_warning,
         "sqlite_path": sqlite_path,
         "mem0_enabled": mem0_enabled,
         "mem0_api_key": mem0_api_key,
