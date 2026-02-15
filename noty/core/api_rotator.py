@@ -12,9 +12,17 @@ from openai import OpenAI
 class APIRotator:
     """Умная ротация между API-ключами OpenRouter."""
 
-    def __init__(self, api_keys: List[str], backend: str = "openai"):
+    def __init__(
+        self,
+        api_keys: List[str],
+        backend: str = "openai",
+        app_referer: Optional[str] = None,
+        app_title: str = "Noty",
+    ):
         self.api_keys = api_keys
         self.backend = backend
+        self.app_referer = app_referer
+        self.app_title = app_title
         self.current_idx = 0
         self.failed_keys = set()
         self.key_stats = {key: {"calls": 0, "errors": 0, "latency_ms": []} for key in api_keys}
@@ -22,6 +30,15 @@ class APIRotator:
         self.max_acceptable_latency_ms = 2500
         self.degraded_cooldown_calls = 2
         self.logger = logging.getLogger(__name__)
+
+    def _build_default_headers(self) -> Dict[str, str]:
+        """Возвращает рекомендуемые OpenRouter-заголовки для идентификации приложения."""
+        headers: Dict[str, str] = {}
+        if self.app_referer:
+            headers["HTTP-Referer"] = self.app_referer
+        if self.app_title:
+            headers["X-Title"] = self.app_title
+        return headers
 
     def _maybe_recover_degraded(self) -> None:
         recovered: list[str] = []
@@ -109,12 +126,15 @@ class APIRotator:
         raise RuntimeError("Все попытки вызова API провалились")
 
     def _call_backend(self, api_key: str, call_params: Dict[str, Any]):
+        default_headers = self._build_default_headers()
         if self.backend == "litellm":
             from litellm import completion
 
+            if default_headers:
+                call_params = {**call_params, "extra_headers": default_headers}
             return completion(api_key=api_key, base_url="https://openrouter.ai/api/v1", **call_params)
 
-        client = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=api_key)
+        client = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=api_key, default_headers=default_headers)
         return client.chat.completions.create(**call_params)
 
     def structured_call(
@@ -131,7 +151,13 @@ class APIRotator:
 
         import instructor
 
-        client = instructor.patch(OpenAI(base_url="https://openrouter.ai/api/v1", api_key=api_key))
+        client = instructor.patch(
+            OpenAI(
+                base_url="https://openrouter.ai/api/v1",
+                api_key=api_key,
+                default_headers=self._build_default_headers(),
+            )
+        )
         self.logger.info("Structured LLM call started: model=%s", model)
         return client.chat.completions.create(response_model=response_model, model=model, messages=messages, **kwargs)
 
