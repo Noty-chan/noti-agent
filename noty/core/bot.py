@@ -76,6 +76,7 @@ class NotyBot:
         text = event_data["text"]
         platform = event_data["platform"]
         scope = event_data["scope"]
+        force_respond = bool(payload.get("force_respond", False))
 
         self.interaction_logger.log_incoming(event_data)
 
@@ -113,20 +114,23 @@ class NotyBot:
         )
 
         with self.metrics.time_block("message_total_seconds", stage="e2e", platform=platform):
-            try:
-                decision = self.message_handler.decide_reaction(text, scope=scope)
-            except TypeError:
-                decision = self.message_handler.decide_reaction(text)
-            if not decision.should_respond:
-                self._log_interaction(event_data, responded=False, response_text="", tools_used=[])
-                result = {
-                    "status": "ignored",
-                    "reason": decision.reason,
-                    "score": round(decision.score, 4),
-                    "threshold": round(decision.threshold, 4),
-                }
-                self.interaction_logger.log_outgoing(event_data, result)
-                return result
+            if force_respond:
+                self.metrics.inc("force_respond_override", scope=scope)
+            else:
+                try:
+                    decision = self.message_handler.decide_reaction(text, scope=scope)
+                except TypeError:
+                    decision = self.message_handler.decide_reaction(text)
+                if not decision.should_respond:
+                    self._log_interaction(event_data, responded=False, response_text="", tools_used=[])
+                    result = {
+                        "status": "ignored",
+                        "reason": decision.reason,
+                        "score": round(decision.score, 4),
+                        "threshold": round(decision.threshold, 4),
+                    }
+                    self.interaction_logger.log_outgoing(event_data, result)
+                    return result
 
             mood_state = self.mood_manager.get_current_state()
             relationship_trend = self.relationship_manager.get_relationship_trend(user_id) if self.relationship_manager else {}

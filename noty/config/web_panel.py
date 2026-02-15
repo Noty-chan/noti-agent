@@ -307,6 +307,7 @@ class LocalPanelChatSimulator:
             "is_private": True,
             "username": username,
             "chat_name": f"web_panel_chat_{chat_id}",
+            "force_respond": True,
         }
         accepted_at = datetime.now()
         with self._lock:
@@ -366,6 +367,7 @@ class LocalPanelChatSimulator:
             "is_private": True,
             "username": username,
             "chat_name": f"web_panel_chat_{chat_id}",
+            "force_respond": True,
         }
         started_at = datetime.now()
         result = self._process_event(request_id=request_id, event=event)
