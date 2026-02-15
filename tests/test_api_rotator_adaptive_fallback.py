@@ -30,3 +30,18 @@ def test_api_rotator_switches_on_error_and_recovers():
     out2 = rotator.call(messages=[{"role": "user", "content": "again"}])
     assert out2["content"] in {"k1", "k2"}
     assert rotator.get_stats()["key_stats"]["k1"]["errors"] >= 1
+
+
+def test_api_rotator_builds_openrouter_identification_headers():
+    rotator = APIRotator(api_keys=["k1"], app_referer="https://noty.local", app_title="Noty Dev")
+
+    assert rotator._build_default_headers() == {
+        "HTTP-Referer": "https://noty.local",
+        "X-Title": "Noty Dev",
+    }
+
+
+def test_api_rotator_skips_referer_when_not_provided():
+    rotator = APIRotator(api_keys=["k1"], app_referer=None, app_title="Noty")
+
+    assert rotator._build_default_headers() == {"X-Title": "Noty"}
