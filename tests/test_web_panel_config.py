@@ -171,6 +171,39 @@ def test_chat_health_snapshot_contains_status_counters(monkeypatch):
     assert "avg_duration_ms" in health
 
 
+def test_render_chat_rows_html_contains_escaped_content():
+    html_payload = web_panel._render_chat_rows_html(
+        [
+            {
+                "timestamp": "10:00:00",
+                "status": "responded",
+                "request_id": "abc",
+                "duration_ms": "45",
+                "user": "<hello>",
+                "noty": "ok & done",
+            }
+        ]
+    )
+
+    assert "&lt;hello&gt;" in html_payload
+    assert "ok &amp; done" in html_payload
+
+
+def test_panel_live_contains_runtime_payload(monkeypatch):
+    monkeypatch.setattr(web_panel.PROCESS_MANAGER, "status", lambda: {"running": True, "pid": 123})
+    monkeypatch.setattr(web_panel.CHAT_SIMULATOR, "history", lambda: [{"request_id": "r1"}])
+    monkeypatch.setattr(web_panel.CHAT_SIMULATOR, "health_snapshot", lambda: {"jobs_total": 1})
+    monkeypatch.setattr(web_panel, "_collect_full_logs", lambda: "log-data")
+
+    response = web_panel.panel_live("admin")
+    payload = json.loads(response.body.decode("utf-8"))
+
+    assert payload["service_status"]["running"] is True
+    assert payload["chat_history"][0]["request_id"] == "r1"
+    assert payload["chat_health"]["jobs_total"] == 1
+    assert payload["full_logs"] == "log-data"
+
+
 
 def test_embedding_filter_sets_hf_env_defaults(monkeypatch):
     import importlib

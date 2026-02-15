@@ -522,6 +522,22 @@ def _compose_view_model() -> dict[str, Any]:
     }
 
 
+def _render_chat_rows_html(history: list[dict[str, str]]) -> str:
+    return "".join(
+        (
+            "<article class='chat-row'>"
+            f"<div class='chat-meta'><b>{html.escape(row['timestamp'])}</b>"
+            f"<span>status: {html.escape(row['status'])}</span>"
+            f"<span>req: {html.escape(row.get('request_id', '-'))}</span>"
+            f"<span>{html.escape(row.get('duration_ms', '-'))} ms</span></div>"
+            f"<div><b>Ты:</b> {html.escape(row['user'])}</div>"
+            f"<div><b>Ноти:</b> {html.escape(row['noty'])}</div>"
+            "</article>"
+        )
+        for row in history
+    )
+
+
 def _read_tail(path: Path, max_lines: int = 400) -> str:
     if not path.exists():
         return ""
@@ -601,86 +617,150 @@ app = FastAPI(title="Noty Local Config Panel")
 @app.get("/", response_class=HTMLResponse)
 def index(_: str = Depends(_verify_auth)) -> str:
     vm = _compose_view_model()
-    running = "🟢 Запущен" if vm["service_status"]["running"] else "🔴 Остановлен"
+    running = "online" if vm["service_status"]["running"] else "offline"
 
     checked_true = "checked" if vm["mem0_enabled"] == "true" else ""
     checked_false = "checked" if vm["mem0_enabled"] != "true" else ""
 
     safe = {key: html.escape(str(value), quote=True) for key, value in vm.items()}
-    chat_rows = "".join(
-        (
-            "<div style='border:1px solid #ddd; padding:8px; margin-bottom:8px;'>"
-            f"<div><b>{html.escape(row['timestamp'])}</b> | status: {html.escape(row['status'])}"
-            f" | req: {html.escape(row.get('request_id', '-'))}"
-            f" | duration_ms: {html.escape(row.get('duration_ms', '-'))}</div>"
-            f"<div><b>Ты:</b> {html.escape(row['user'])}</div>"
-            f"<div><b>Ноти:</b> {html.escape(row['noty'])}</div>"
-            "</div>"
-        )
-        for row in vm["chat_history"]
-    )
+    chat_rows = _render_chat_rows_html(vm["chat_history"])
 
     return f"""
     <html>
-    <head><meta charset='utf-8'><title>Noty Panel</title></head>
-    <body style='font-family: sans-serif; max-width: 920px; margin: 20px auto;'>
-      <h1>Noty локальная панель</h1>
-      <p><b>Статус сервиса:</b> {running}</p>
-      <p><b>Personality version:</b> {safe['personality_version']} | <b>reason:</b> {safe['personality_reason']}</p>
-      <p><b>OpenRouter ключей:</b> {safe['api_keys_count']}</p>
+    <head>
+      <meta charset='utf-8'>
+      <title>Noty Panel</title>
+      <style>
+        :root {{ color-scheme: dark; }}
+        body {{ font-family: Inter, system-ui, sans-serif; margin: 0; background: #0a0f1f; color: #e8ecff; }}
+        .wrap {{ max-width: 1180px; margin: 0 auto; padding: 18px; }}
+        .card {{ background: linear-gradient(145deg, #111939, #0d142c); border: 1px solid #22315f; border-radius: 14px; padding: 16px; }}
+        .header {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }}
+        .badge {{ padding: 5px 10px; border-radius: 999px; font-size: 12px; background: #1f2f63; }}
+        .badge.offline {{ background: #5b2434; }}
+        .actions form {{ display: inline-block; margin-right: 8px; }}
+        button {{ cursor: pointer; border: 0; border-radius: 10px; padding: 8px 12px; background: #385cff; color: #fff; font-weight: 600; }}
+        .grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 14px; }}
+        .chat-stream {{ max-height: 440px; overflow: auto; }}
+        .chat-row {{ border: 1px solid #25386d; border-radius: 10px; padding: 10px; margin-bottom: 10px; background: #121c3b; }}
+        .chat-meta {{ display: flex; gap: 10px; margin-bottom: 8px; font-size: 12px; color: #9db0ed; flex-wrap: wrap; }}
+        pre {{ white-space: pre-wrap; background: #090d1b; color: #dce4ff; padding: 12px; border-radius: 10px; max-height: 460px; overflow: auto; border: 1px solid #22315f; }}
+        input, textarea {{ width: 100%; border-radius: 8px; border: 1px solid #304174; background: #0f1631; color: #f1f4ff; padding: 8px; }}
+        details {{ margin-top: 14px; }}
+      </style>
+    </head>
+    <body>
+    <div class='wrap'>
+      <section class='card'>
+        <div class='header'>
+          <h1 style='margin:0'>Noty live-панель</h1>
+          <span id='serviceBadge' class='badge {running}'>{running}</span>
+        </div>
 
-      <form method='post' action='/save'>
-        <h2>Основные параметры</h2>
-        <label>VK token<br><input name='vk_token' style='width:100%' value='{safe['vk_token']}'></label><br><br>
-        <label>VK group id<br><input name='vk_group_id' style='width:100%' value='{safe['vk_group_id']}'></label><br><br>
-        <label>LLM backend<br><input name='llm_backend' style='width:100%' value='{safe['llm_backend']}'></label><br><br>
-        <label>OpenRouter API key<br><input name='openrouter_api_key' style='width:100%' value='{safe['openrouter_api_key']}'></label><br><br>
-        <label>HF token (для ускоренных/аутентифицированных загрузок embeddings)<br><input name='hf_token' style='width:100%' value='{safe['hf_token']}'></label><br><br>
-        <label>HF disable symlink warning (Windows)<br><input name='hf_hub_disable_symlinks_warning' style='width:100%' value='{safe['hf_hub_disable_symlinks_warning']}'></label><br><br>
-        <label>SQLite path<br><input name='sqlite_path' style='width:100%' value='{safe['sqlite_path']}'></label><br><br>
+        <div class='actions'>
+          <form method='post' action='/service/start' style='display:inline-block'><button>Запустить</button></form>
+          <form method='post' action='/service/stop' style='display:inline-block'><button>Остановить</button></form>
+          <form method='post' action='/service/reload' style='display:inline-block'><button>Перезагрузить</button></form>
+        </div>
 
-        <h2>Mem0 / Qdrant</h2>
-        <label><input type='radio' name='mem0_enabled' value='true' {checked_true}> Mem0 включён</label>
-        <label><input type='radio' name='mem0_enabled' value='false' {checked_false}> Mem0 выключен</label><br><br>
-        <label>Mem0 API key<br><input name='mem0_api_key' style='width:100%' value='{safe['mem0_api_key']}'></label><br><br>
-        <label>Qdrant URL<br><input name='qdrant_url' style='width:100%' value='{safe['qdrant_url']}'></label><br><br>
-        <label>Qdrant API key<br><input name='qdrant_api_key' style='width:100%' value='{safe['qdrant_api_key']}'></label><br><br>
-
-        <h2>Безопасность панели</h2>
-        <label>Новый пароль панели (оставь пустым чтобы не менять)<br>
-        <input name='local_panel_password' type='password' style='width:100%'></label><br><br>
-
-        <h2>Редактор prompt-конфига (JSON)</h2>
-        <textarea name='prompt_config_json' rows='18' style='width:100%'>{safe['prompt_config_json']}</textarea><br><br>
-
-        <button type='submit'>Сохранить</button>
-      </form>
-
-      <hr>
-      <form method='post' action='/service/start' style='display:inline-block'><button>Запустить Noti</button></form>
-      <form method='post' action='/service/stop' style='display:inline-block'><button>Остановить Noti</button></form>
-      <form method='post' action='/service/reload' style='display:inline-block'><button>Перезагрузить Noti</button></form>
-      <form method='get' action='/' style='display:inline-block'><button>Статус сервиса</button></form>
-
-      <hr>
-      <h2>Чат с Ноти (симуляция отдельного ЛС)</h2>
-      <p><b>Chat health:</b> jobs={vm['chat_health']['jobs_total']} | avg_duration_ms={vm['chat_health']['avg_duration_ms']} | statuses={html.escape(str(vm['chat_health']['statuses']))}</p>
+        <div class='grid'>
+          <section class='card'>
+            <h2 style='margin-top:0'>Быстрый чат / ответы</h2>
+            <p id='chatHealth'><b>Chat health:</b> jobs={vm['chat_health']['jobs_total']} | avg_duration_ms={vm['chat_health']['avg_duration_ms']} | statuses={html.escape(str(vm['chat_health']['statuses']))}</p>
       <form method='post' action='/chat/send'>
         <label>Chat ID<br><input name='chat_id' style='width:100%' value='9001'></label><br><br>
         <label>User ID<br><input name='user_id' style='width:100%' value='1001'></label><br><br>
         <label>Username<br><input name='username' style='width:100%' value='web_user'></label><br><br>
         <label>Сообщение Ноти<br><textarea name='message_text' rows='4' style='width:100%'></textarea></label><br><br>
-        <button type='submit'>Отправить сообщение Ноти</button>
+        <button type='submit'>Отправить</button>
       </form>
-      <div style='margin-top:12px'>{chat_rows or '<i>Диалог пока пуст.</i>'}</div>
+            <div id='chatRows' class='chat-stream' style='margin-top:12px'>{chat_rows or '<i>Диалог пока пуст.</i>'}</div>
+          </section>
+          <section class='card'>
+            <h2 style='margin-top:0'>Логи (автообновление)</h2>
+            <pre id='liveLogs'>{safe['full_logs']}</pre>
+          </section>
+        </div>
 
-      <hr>
-      <h2>Полный лог (runtime + interactions + thoughts + actions)</h2>
-      <form method='get' action='/' style='display:inline-block'><button>Обновить лог</button></form>
-      <pre style='white-space: pre-wrap; background:#111; color:#ddd; padding:12px; border-radius:8px; max-height:600px; overflow:auto;'>{safe['full_logs']}</pre>
+        <details>
+          <summary>Расширенные настройки</summary>
+          <form method='post' action='/save'>
+            <h3>Параметры подключения</h3>
+            <label>VK token<br><input name='vk_token' value='{safe['vk_token']}'></label><br><br>
+            <label>VK group id<br><input name='vk_group_id' value='{safe['vk_group_id']}'></label><br><br>
+            <label>LLM backend<br><input name='llm_backend' value='{safe['llm_backend']}'></label><br><br>
+            <label>OpenRouter API key<br><input name='openrouter_api_key' value='{safe['openrouter_api_key']}'></label><br><br>
+            <label>HF token<br><input name='hf_token' value='{safe['hf_token']}'></label><br><br>
+            <label>HF disable symlink warning<br><input name='hf_hub_disable_symlinks_warning' value='{safe['hf_hub_disable_symlinks_warning']}'></label><br><br>
+            <label>SQLite path<br><input name='sqlite_path' value='{safe['sqlite_path']}'></label><br><br>
+            <label><input type='radio' name='mem0_enabled' value='true' {checked_true}> Mem0 включён</label>
+            <label><input type='radio' name='mem0_enabled' value='false' {checked_false}> Mem0 выключен</label><br><br>
+            <label>Mem0 API key<br><input name='mem0_api_key' value='{safe['mem0_api_key']}'></label><br><br>
+            <label>Qdrant URL<br><input name='qdrant_url' value='{safe['qdrant_url']}'></label><br><br>
+            <label>Qdrant API key<br><input name='qdrant_api_key' value='{safe['qdrant_api_key']}'></label><br><br>
+            <label>Новый пароль панели<br><input name='local_panel_password' type='password'></label><br><br>
+            <label>Prompt config JSON<br><textarea name='prompt_config_json' rows='16'>{safe['prompt_config_json']}</textarea></label><br><br>
+            <button type='submit'>Сохранить настройки</button>
+          </form>
+        </details>
+      </section>
+    </div>
+    <script>
+      function escapeHtml(text) {{
+        return text
+          .replaceAll('&', '&amp;')
+          .replaceAll('<', '&lt;')
+          .replaceAll('>', '&gt;')
+          .replaceAll('"', '&quot;')
+          .replaceAll("'", '&#039;');
+      }}
+
+      function renderChatRows(rows) {{
+        if (!rows.length) return '<i>Диалог пока пуст.</i>';
+        return rows.map((row) => {{
+          const ts = escapeHtml(String(row.timestamp || '-'));
+          const status = escapeHtml(String(row.status || '-'));
+          const req = escapeHtml(String(row.request_id || '-'));
+          const ms = escapeHtml(String(row.duration_ms || '-'));
+          const user = escapeHtml(String(row.user || ''));
+          const noty = escapeHtml(String(row.noty || ''));
+          return `<article class="chat-row"><div class="chat-meta"><b>${{ts}}</b><span>status: ${{status}}</span><span>req: ${{req}}</span><span>${{ms}} ms</span></div><div><b>Ты:</b> ${{user}}</div><div><b>Ноти:</b> ${{noty}}</div></article>`;
+        }}).join('');
+      }}
+
+      async function refreshLive() {{
+        try {{
+          const response = await fetch('/panel/live', {{ cache: 'no-store' }});
+          if (!response.ok) return;
+          const data = await response.json();
+          const badge = document.getElementById('serviceBadge');
+          const state = data.service_status.running ? 'online' : 'offline';
+          badge.className = `badge ${{state}}`;
+          badge.textContent = state;
+
+          document.getElementById('chatHealth').innerHTML = `<b>Chat health:</b> jobs=${{data.chat_health.jobs_total}} | avg_duration_ms=${{data.chat_health.avg_duration_ms}} | statuses=${{escapeHtml(JSON.stringify(data.chat_health.statuses))}}`;
+          document.getElementById('chatRows').innerHTML = renderChatRows(data.chat_history || []);
+          document.getElementById('liveLogs').textContent = data.full_logs || 'Логи пока пустые.';
+        }} catch (_e) {{}}
+      }}
+
+      setInterval(refreshLive, 1500);
+    </script>
     </body>
     </html>
     """
+
+
+@app.get("/panel/live")
+def panel_live(_: str = Depends(_verify_auth)) -> JSONResponse:
+    return JSONResponse(
+        {
+            "service_status": PROCESS_MANAGER.status(),
+            "chat_history": CHAT_SIMULATOR.history(),
+            "chat_health": CHAT_SIMULATOR.health_snapshot(),
+            "full_logs": _collect_full_logs(),
+        }
+    )
 
 
 @app.post("/save")
