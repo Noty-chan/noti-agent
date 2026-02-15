@@ -1,5 +1,7 @@
+from pathlib import Path
+
 from noty.transport.telegram.mapper import map_telegram_update
-from noty.transport.router import TransportRouter
+from noty.transport.router import TransportRouter, create_transport_router
 from noty.transport.types import normalize_incoming_event
 from noty.transport.vk.mapper import map_vk_event
 
@@ -96,3 +98,40 @@ def test_normalize_event_rejects_missing_required_fields():
         assert "отсутствуют поля" in str(exc)
     else:
         raise AssertionError("normalize_incoming_event must reject incomplete payload")
+
+
+def test_create_transport_router_uses_vk_longpoll_source_without_static_fallback(tmp_path: Path, monkeypatch):
+    import noty.transport.router as router_module
+
+    calls = {"longpoll_server": 0}
+
+    class FakeVKClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def get_longpoll_server(self):
+            calls["longpoll_server"] += 1
+            return {"server": "https://lp.vk.test", "key": "k", "ts": "10"}
+
+    monkeypatch.setattr(router_module, "VKAPIClient", FakeVKClient)
+    monkeypatch.setattr(router_module, "run_with_backoff", lambda operation, **_kwargs: operation())
+
+    cfg = tmp_path / "bot_config.yaml"
+    cfg.write_text(
+        """
+transport:
+  mode: vk_longpoll
+  active_platforms: [vk]
+  vk_token: token
+  vk_group_id: 42
+  state_path: ./noty/data/test_vk_state.json
+""".strip(),
+        encoding="utf-8",
+    )
+
+    router = create_transport_router(cfg)
+
+    assert len(router.adapters) == 1
+    assert router.adapters[0].platform == "vk"
+    assert router.adapters[0].source.__class__.__name__ == "VKLongPollSource"
+    assert calls["longpoll_server"] == 1

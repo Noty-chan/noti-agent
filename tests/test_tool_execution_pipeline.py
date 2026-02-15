@@ -168,3 +168,48 @@ def test_bot_post_processing_skips_mood_and_relationship_on_tool_denied(tmp_path
     assert result["tool_results"][0]["status"] == "denied"
     assert relationship.updated_outcomes == []
 
+
+
+def test_bot_builds_thoughts_before_prompt_and_passes_strategy_context(tmp_path):
+    class _OrderMessageHandler(_MessageHandlerStub):
+        def __init__(self):
+            self.prompt_kwargs = None
+
+        def prepare_prompt(self, **kwargs):
+            self.prompt_kwargs = kwargs
+            return "prompt"
+
+    class _OrderMonologue:
+        def __init__(self):
+            self.generated = False
+
+        def generate_thoughts(self, context, cheap_model=True):
+            self.generated = True
+            return {"strategy": "dry_brief", "quality_score": 0.77, "decision": "respond"}
+
+    db = SQLiteDBManager(str(tmp_path / "noty.db"))
+    executor = SafeToolExecutor(owner_id=1, actions_log_dir=str(tmp_path / "actions"))
+    executor.register_tool("echo", _echo, description="echo-tool")
+    mood = MoodManager()
+    handler = _OrderMessageHandler()
+    monologue = _OrderMonologue()
+
+    bot = NotyBot(
+        api_rotator=_RotatorStub(),
+        message_handler=handler,
+        mood_manager=mood,
+        tool_executor=executor,
+        monologue=monologue,
+        db_manager=db,
+        relationship_manager=_RelationshipStub(),
+    )
+
+    result = bot.handle_message({"chat_id": 1, "user_id": 1, "text": "сделай", "username": "u1"})
+
+    assert result["status"] == "responded"
+    assert monologue.generated is True
+    assert handler.prompt_kwargs is not None
+    assert handler.prompt_kwargs["thought_context"]["strategy"] == "dry_brief"
+    env_context = handler.prompt_kwargs["environment_context"]
+    assert env_context["agent_runtime"]["can_list_tools"] is True
+    assert env_context["tools"][0]["name"] == "echo"

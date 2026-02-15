@@ -67,6 +67,8 @@ class MessageHandler:
         runtime_modifiers: Dict[str, Any] | None = None,
         strategy_hints: Dict[str, Any] | None = None,
         persona_profile: Dict[str, Any] | None = None,
+        thought_context: Dict[str, Any] | None = None,
+        environment_context: Dict[str, Any] | None = None,
     ) -> str:
         with self.metrics.time_block("context_build_seconds", stage="context_build", platform=platform):
             context = self.context_builder.build_context(
@@ -85,6 +87,8 @@ class MessageHandler:
             user_relationship=user_relationship,
             runtime_modifiers=runtime_modifiers,
             persona_profile=persona_profile,
+            thought_context=thought_context,
+            environment_context=environment_context,
         )
 
     def get_filter_stats(self) -> Dict[str, Any]:

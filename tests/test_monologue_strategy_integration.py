@@ -108,3 +108,34 @@ def test_dynamic_context_builder_adds_and_applies_strategy_hints():
     assert "избегать тем политике" in context["summary"]
     assert context["metadata"]["strategy_hints"]["avoid_topics"] == ["политике"]
     assert all("политике" not in m["content"].lower() for m in context["messages"])
+
+
+def test_prompt_builder_exposes_environment_and_thought_guidance(tmp_path: Path):
+    from noty.prompts.prompt_builder import ModularPromptBuilder
+
+    builder = ModularPromptBuilder(str(tmp_path / "prompts"))
+    prompt = builder.build_full_prompt(
+        context={"messages": [{"role": "user", "content": "привет"}], "summary": ""},
+        thought_context={"strategy": "dry_brief", "quality_score": 0.91, "decision": "respond"},
+        environment_context={
+            "platform": "vk",
+            "agent_runtime": {"can_call_tools": True, "can_list_tools": True},
+            "tools": [
+                {
+                    "name": "notebook_list",
+                    "description": "Показать заметки",
+                    "risk_level": "low",
+                    "requires_confirmation": False,
+                    "requires_owner": False,
+                    "requires_private": False,
+                    "allowed_roles": ["user"],
+                }
+            ],
+        },
+    )
+
+    assert "СРЕДА И ВОЗМОЖНОСТИ АГЕНТА" in prompt
+    assert "can_list_tools: True" in prompt
+    assert "notebook_list" in prompt
+    assert "THOUGHT GUIDANCE (internal)" in prompt
+    assert "strategy_from_thoughts: dry_brief" in prompt
